@@ -340,7 +340,8 @@ export function detectFrameworkFromPath(filePath: string): FrameworkHint | null 
   // Ruby: Rakefile or *.rake (task definitions)
   if (p.endsWith('/rakefile') || p.endsWith('.rake')) {
     return { framework: 'ruby', entryPointMultiplier: 1.5, reason: 'ruby-rake' };
-    
+  }
+  
   // ========== SWIFT / iOS ==========
 
   // iOS App entry points (highest priority)
