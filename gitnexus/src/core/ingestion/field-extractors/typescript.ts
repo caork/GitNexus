@@ -58,7 +58,18 @@ export class TypeScriptFieldExtractor extends BaseFieldExtractor {
    * Extract visibility modifier from a field node
    */
   protected extractVisibility(node: SyntaxNode): string {
-    // Check for modifiers in the field's unnamed children
+    // Check for accessibility_modifier named child (tree-sitter typescript)
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child && child.type === 'accessibility_modifier') {
+        const text = child.text.trim();
+        if (TypeScriptFieldExtractor.VISIBILITY_MODIFIERS.has(text)) {
+          return text;
+        }
+      }
+    }
+
+    // Check for modifiers in the field's unnamed children (fallback)
     for (let i = 0; i < node.childCount; i++) {
       const child = node.child(i);
       if (child && !child.isNamed) {
@@ -340,10 +351,9 @@ export class TypeScriptFieldExtractor extends BaseFieldExtractor {
     }
 
     // Find nested type declarations
-    const nestedDeclarations = node.descendantsOfType([
-      'class_declaration',
-      'interface_declaration',
-    ].join(','));
+    const nestedClasses = node.descendantsOfType('class_declaration');
+    const nestedInterfaces = node.descendantsOfType('interface_declaration');
+    const nestedDeclarations = [...nestedClasses, ...nestedInterfaces];
 
     for (const nested of nestedDeclarations) {
       // Skip the current node itself
