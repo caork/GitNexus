@@ -1,0 +1,56 @@
+// gitnexus/src/core/ingestion/field-types.ts
+
+import type { TypeEnv } from './type-env.js';
+import type { SymbolTable } from './symbol-table.js';
+import { SupportedLanguages } from '../../config/supported-languages.js';
+
+/**
+ * Represents a field or property within a class/struct/interface
+ */
+export interface FieldInfo {
+  /** Field name */
+  name: string;
+  /** Resolved type (may be primitive, FQN, or generic) */
+  type: string | null;
+  /** Visibility: public, private, protected, internal */
+  visibility: string;
+  /** Is this a static member? */
+  isStatic: boolean;
+  /** Is this readonly/const? */
+  isReadonly: boolean;
+  /** Source file path */
+  sourceFile: string;
+  /** Line number */
+  line: number;
+}
+
+/**
+ * Maps owner type FQN to its fields
+ */
+export type FieldTypeMap = Map<string, FieldInfo[]>;
+
+/**
+ * Context for field extraction
+ */
+export interface FieldExtractorContext {
+  /** Type environment for resolution */
+  typeEnv: TypeEnv;
+  /** Symbol table for FQN lookups */
+  symbolTable: SymbolTable;
+  /** Current file path */
+  filePath: string;
+  /** Language ID */
+  language: SupportedLanguages;
+}
+
+/**
+ * Result of field extraction from a type declaration
+ */
+export interface ExtractedFields {
+  /** Owner type FQN */
+  ownerFqn: string;
+  /** Extracted fields */
+  fields: FieldInfo[];
+  /** Nested types found during extraction */
+  nestedTypes: string[];
+}
