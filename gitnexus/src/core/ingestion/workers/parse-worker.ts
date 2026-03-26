@@ -29,7 +29,6 @@ try { Dart = _require('tree-sitter-dart'); } catch {}
 let Kotlin: any = null;
 try { Kotlin = _require('tree-sitter-kotlin'); } catch {}
 import { getLanguageFromFilename } from '../utils/language-detection.js';
-import { isBuiltInOrNoise } from '../utils/noise-filter.js';
 import {
   FUNCTION_NODE_TYPES,
   extractFunctionName,
@@ -388,6 +387,23 @@ const findEnclosingFunctionId = (node: any, filePath: string, provider: Language
         return result;
       }
     }
+
+    // Language-specific enclosing function resolution (e.g., Dart where
+    // function_body is a sibling of function_signature, not a child).
+    if (provider.enclosingFunctionFinder) {
+      const customResult = provider.enclosingFunctionFinder(current);
+      if (customResult) {
+        let finalLabel: NodeLabel = customResult.label;
+        if (provider.labelOverride) {
+          const override = provider.labelOverride(current.previousSibling, finalLabel);
+          if (override !== null) finalLabel = override;
+        }
+        const result = generateId(finalLabel, `${filePath}:${customResult.funcName}`);
+        functionIdCache.set(node, result);
+        return result;
+      }
+    }
+
     current = current.parent;
   }
   functionIdCache.set(node, null);
@@ -1268,7 +1284,7 @@ const processFileGroup = (
             // kind === 'call' — fall through to normal call processing below
           }
 
-          if (!isBuiltInOrNoise(calledName)) {
+          if (!provider.isBuiltInName(calledName)) {
             const callNode = captureMap['call'];
             const sourceId = findEnclosingFunctionId(callNode, file.path, provider)
               || generateId('File', file.path);

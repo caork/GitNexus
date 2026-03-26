@@ -11,7 +11,6 @@ import { getLanguageFromFilename } from './utils/language-detection.js';
 import { isVerboseIngestionEnabled } from './utils/verbose.js';
 import { yieldToEventLoop } from './utils/event-loop.js';
 import { FUNCTION_NODE_TYPES, extractFunctionName, findEnclosingClassId } from './utils/ast-helpers.js';
-import { isBuiltInOrNoise } from './utils/noise-filter.js';
 import {
   countCallArguments,
   inferCallForm,
@@ -210,6 +209,26 @@ const findEnclosingFunction = (
         return generateId(finalLabel, `${filePath}:${funcName}`);
       }
     }
+
+    // Language-specific enclosing function resolution (e.g., Dart where
+    // function_body is a sibling of function_signature, not a child).
+    if (provider.enclosingFunctionFinder) {
+      const customResult = provider.enclosingFunctionFinder(current);
+      if (customResult) {
+        // Try SymbolTable first (same pattern as the FUNCTION_NODE_TYPES branch above).
+        const resolved = ctx.resolve(customResult.funcName, filePath);
+        if (resolved?.tier === 'same-file' && resolved.candidates.length > 0) {
+          return resolved.candidates[0].nodeId;
+        }
+        let finalLabel = customResult.label;
+        if (provider.labelOverride) {
+          const override = provider.labelOverride(current.previousSibling!, finalLabel);
+          if (override !== null) finalLabel = override;
+        }
+        return generateId(finalLabel, `${filePath}:${customResult.funcName}`);
+      }
+    }
+
     current = current.parent;
   }
 
@@ -497,7 +516,7 @@ export const processCalls = async (
         }
       }
 
-      if (isBuiltInOrNoise(calledName)) return;
+      if (provider.isBuiltInName(calledName)) return;
 
       const callNode = captureMap['call'];
       const callForm = inferCallForm(callNode, nameNode);

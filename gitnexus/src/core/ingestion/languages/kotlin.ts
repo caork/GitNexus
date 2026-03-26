@@ -19,6 +19,21 @@ import { isKotlinClassMethod } from '../utils/ast-helpers.js';
 import { createFieldExtractor } from '../field-extractors/generic.js';
 import { kotlinConfig } from '../field-extractors/configs/jvm.js';
 
+const BUILT_INS: ReadonlySet<string> = new Set([
+  'println', 'print', 'readLine', 'require', 'requireNotNull', 'check', 'assert', 'lazy', 'error',
+  'listOf', 'mapOf', 'setOf', 'mutableListOf', 'mutableMapOf', 'mutableSetOf',
+  'arrayOf', 'sequenceOf', 'also', 'apply', 'run', 'with', 'takeIf', 'takeUnless',
+  'TODO', 'buildString', 'buildList', 'buildMap', 'buildSet',
+  'repeat', 'synchronized',
+  'launch', 'async', 'runBlocking', 'withContext', 'coroutineScope',
+  'supervisorScope', 'delay',
+  'flow', 'flowOf', 'collect', 'emit', 'onEach', 'catch',
+  'buffer', 'conflate', 'distinctUntilChanged',
+  'flatMapLatest', 'flatMapMerge', 'combine',
+  'stateIn', 'shareIn', 'launchIn',
+  'to', 'until', 'downTo', 'step',
+]);
+
 export const kotlinProvider = defineLanguage({
   id: SupportedLanguages.Kotlin,
   extensions: ['.kt', '.kts'],
@@ -30,6 +45,7 @@ export const kotlinProvider = defineLanguage({
   importPathPreprocessor: appendKotlinWildcard,
   mroStrategy: 'implements-split',
   fieldExtractor: createFieldExtractor(kotlinConfig),
+  builtInNames: BUILT_INS,
   labelOverride: (functionNode, defaultLabel) => {
     if (defaultLabel !== 'Function') return defaultLabel;
     if (isKotlinClassMethod(functionNode)) return 'Method';

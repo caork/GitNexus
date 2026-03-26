@@ -18,6 +18,27 @@ import { typescriptFieldExtractor } from '../field-extractors/typescript.js';
 import { createFieldExtractor } from '../field-extractors/generic.js';
 import { javascriptConfig } from '../field-extractors/configs/typescript-javascript.js';
 
+const BUILT_INS: ReadonlySet<string> = new Set([
+  'console', 'log', 'warn', 'error', 'info', 'debug',
+  'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+  'parseInt', 'parseFloat', 'isNaN', 'isFinite',
+  'encodeURI', 'decodeURI', 'encodeURIComponent', 'decodeURIComponent',
+  'JSON', 'parse', 'stringify',
+  'Object', 'Array', 'String', 'Number', 'Boolean', 'Symbol', 'BigInt',
+  'Map', 'Set', 'WeakMap', 'WeakSet',
+  'Promise', 'resolve', 'reject', 'then', 'catch', 'finally',
+  'Math', 'Date', 'RegExp', 'Error',
+  'require', 'import', 'export', 'fetch', 'Response', 'Request',
+  'useState', 'useEffect', 'useCallback', 'useMemo', 'useRef', 'useContext',
+  'useReducer', 'useLayoutEffect', 'useImperativeHandle', 'useDebugValue',
+  'createElement', 'createContext', 'createRef', 'forwardRef', 'memo', 'lazy',
+  'map', 'filter', 'reduce', 'forEach', 'find', 'findIndex', 'some', 'every',
+  'includes', 'indexOf', 'slice', 'splice', 'concat', 'join', 'split',
+  'push', 'pop', 'shift', 'unshift', 'sort', 'reverse',
+  'keys', 'values', 'entries', 'assign', 'freeze', 'seal',
+  'hasOwnProperty', 'toString', 'valueOf',
+]);
+
 export const typescriptProvider = defineLanguage({
   id: SupportedLanguages.TypeScript,
   extensions: ['.ts', '.tsx'],
@@ -27,6 +48,7 @@ export const typescriptProvider = defineLanguage({
   importResolver: resolveTypescriptImport,
   namedBindingExtractor: extractTsNamedBindings,
   fieldExtractor: typescriptFieldExtractor,
+  builtInNames: BUILT_INS,
 });
 
 export const javascriptProvider = defineLanguage({
@@ -38,4 +60,5 @@ export const javascriptProvider = defineLanguage({
   importResolver: resolveJavascriptImport,
   namedBindingExtractor: extractTsNamedBindings,
   fieldExtractor: createFieldExtractor(javascriptConfig),
+  builtInNames: BUILT_INS,
 });
