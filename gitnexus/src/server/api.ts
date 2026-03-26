@@ -22,6 +22,10 @@ import { hybridSearch } from '../core/search/hybrid-search.js';
 // at server startup — crashes on unsupported Node ABI versions (#89)
 import { LocalBackend } from '../mcp/local/local-backend.js';
 import { mountMCPEndpoints } from './mcp-http.js';
+import { fork } from 'child_process';
+import { fileURLToPath } from 'url';
+import { JobManager } from './analyze-job.js';
+import { extractRepoName, getCloneDir, cloneOrPull } from './git-clone.js';
 
 /**
  * Determine whether an HTTP Origin header value is allowed by CORS policy.
@@ -192,6 +196,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   const backend = new LocalBackend();
   await backend.init();
   const cleanupMcp = mountMCPEndpoints(app, backend);
+  const jobManager = new JobManager();
 
   // Helper: resolve a repo by name from the global registry, or default to first
   const resolveRepo = async (repoName?: string) => {
@@ -400,6 +405,221 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
+  // ── Analyze API ──────────────────────────────────────────────────────
+
+  // POST /api/analyze — start a new analysis job
+  app.post('/api/analyze', async (req, res) => {
+    try {
+      const { url: repoUrl, path: repoLocalPath, force, embeddings } = req.body;
+
+      // Input type validation
+      if (repoUrl !== undefined && typeof repoUrl !== 'string') {
+        res.status(400).json({ error: '"url" must be a string' });
+        return;
+      }
+      if (repoLocalPath !== undefined && typeof repoLocalPath !== 'string') {
+        res.status(400).json({ error: '"path" must be a string' });
+        return;
+      }
+
+      if (!repoUrl && !repoLocalPath) {
+        res.status(400).json({ error: 'Provide "url" (git URL) or "path" (local path)' });
+        return;
+      }
+
+      // Path validation: require absolute path, reject traversal
+      if (repoLocalPath) {
+        const resolved = path.resolve(repoLocalPath);
+        if (resolved !== repoLocalPath && !path.isAbsolute(repoLocalPath)) {
+          res.status(400).json({ error: '"path" must be an absolute path' });
+          return;
+        }
+      }
+
+      const job = jobManager.createJob({ repoUrl, repoPath: repoLocalPath });
+
+      // If job was already running (dedup), just return its id
+      if (job.status !== 'queued') {
+        res.status(202).json({ jobId: job.id, status: job.status });
+        return;
+      }
+
+      // Mark as active synchronously to prevent race with concurrent requests
+      jobManager.updateJob(job.id, { status: 'cloning' });
+
+      // Start async work — don't await
+      (async () => {
+        try {
+          let targetPath = repoLocalPath;
+
+          // Clone if URL provided
+          if (repoUrl && !repoLocalPath) {
+            const repoName = extractRepoName(repoUrl);
+            targetPath = getCloneDir(repoName);
+
+            jobManager.updateJob(job.id, {
+              status: 'cloning',
+              repoName,
+              progress: { phase: 'cloning', percent: 0, message: `Cloning ${repoUrl}...` },
+            });
+
+            await cloneOrPull(repoUrl, targetPath, (progress) => {
+              jobManager.updateJob(job.id, {
+                progress: { phase: progress.phase, percent: 5, message: progress.message },
+              });
+            });
+          }
+
+          if (!targetPath) {
+            throw new Error('No target path resolved');
+          }
+
+          jobManager.updateJob(job.id, { repoPath: targetPath, status: 'analyzing' });
+
+          // Fork child process with 8GB heap
+          const workerPath = fileURLToPath(new URL('./analyze-worker.js', import.meta.url));
+          const child = fork(workerPath, [], {
+            execArgv: ['--max-old-space-size=8192'],
+            stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+          });
+
+          child.on('message', (msg: any) => {
+            if (msg.type === 'progress') {
+              jobManager.updateJob(job.id, {
+                status: 'analyzing',
+                progress: { phase: msg.phase, percent: msg.percent, message: msg.message },
+              });
+            } else if (msg.type === 'complete') {
+              jobManager.updateJob(job.id, {
+                status: 'complete',
+                repoName: msg.result.repoName,
+              });
+              // Reinitialize backend so it picks up the new repo
+              backend.init().catch(() => {});
+            } else if (msg.type === 'error') {
+              jobManager.updateJob(job.id, {
+                status: 'failed',
+                error: msg.message,
+              });
+            }
+          });
+
+          child.on('error', (err) => {
+            jobManager.updateJob(job.id, {
+              status: 'failed',
+              error: `Worker process error: ${err.message}`,
+            });
+          });
+
+          child.on('exit', (code) => {
+            const currentJob = jobManager.getJob(job.id);
+            if (currentJob && currentJob.status !== 'complete' && currentJob.status !== 'failed') {
+              jobManager.updateJob(job.id, {
+                status: 'failed',
+                error: `Worker exited unexpectedly (code ${code})`,
+              });
+            }
+          });
+
+          // Send start command to child
+          child.send({
+            type: 'start',
+            repoPath: targetPath,
+            options: { force: !!force, embeddings: !!embeddings },
+          });
+
+        } catch (err: any) {
+          jobManager.updateJob(job.id, {
+            status: 'failed',
+            error: err.message || 'Analysis failed',
+          });
+        }
+      })();
+
+      res.status(202).json({ jobId: job.id, status: 'queued' });
+    } catch (err: any) {
+      if (err.message?.includes('already in progress')) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(500).json({ error: err.message || 'Failed to start analysis' });
+      }
+    }
+  });
+
+  // GET /api/analyze/:jobId — poll job status
+  app.get('/api/analyze/:jobId', (req, res) => {
+    const job = jobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    res.json({
+      id: job.id,
+      status: job.status,
+      repoUrl: job.repoUrl,
+      repoPath: job.repoPath,
+      repoName: job.repoName,
+      progress: job.progress,
+      error: job.error,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+    });
+  });
+
+  // GET /api/analyze/:jobId/progress — SSE stream
+  app.get('/api/analyze/:jobId/progress', (req, res) => {
+    const job = jobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+
+    // Set up SSE
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+
+    // Send current state immediately
+    res.write(`data: ${JSON.stringify(job.progress)}\n\n`);
+
+    // If already terminal, send complete event and close
+    if (job.status === 'complete' || job.status === 'failed') {
+      res.write(`event: ${job.status}\ndata: ${JSON.stringify({
+        repoName: job.repoName,
+        error: job.error,
+      })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Subscribe to progress updates
+    const unsubscribe = jobManager.onProgress(job.id, (progress) => {
+      try {
+        if (progress.phase === 'complete' || progress.phase === 'failed') {
+          const eventJob = jobManager.getJob(req.params.jobId);
+          res.write(`event: ${progress.phase}\ndata: ${JSON.stringify({
+            repoName: eventJob?.repoName,
+            error: eventJob?.error,
+          })}\n\n`);
+          res.end();
+          unsubscribe();
+        } else {
+          res.write(`data: ${JSON.stringify(progress)}\n\n`);
+        }
+      } catch {
+        // Client disconnected
+        unsubscribe();
+      }
+    });
+
+    // Clean up on client disconnect
+    req.on('close', () => {
+      unsubscribe();
+    });
+  });
+
   // Global error handler — catch anything the route handlers miss
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error('Unhandled error:', err);
@@ -413,6 +633,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   // Graceful shutdown — close Express + LadybugDB cleanly
   const shutdown = async () => {
     server.close();
+    jobManager.dispose();
     await cleanupMcp();
     await closeLbug();
     await backend.disconnect();
