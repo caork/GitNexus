@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'path';
 import {
-  FIXTURES, getRelationships, getNodesByLabel, edgeSet,
+  FIXTURES, getRelationships, getNodesByLabel, getNodesByLabelFull, edgeSet,
   runPipelineFromRepo, type PipelineResult,
 } from './helpers.js';
 import { isLanguageAvailable } from '../../../src/core/tree-sitter/parser-loader.js';
@@ -550,6 +550,22 @@ describe.skipIf(!swiftAvailable)('Swift field-type resolution', () => {
     expect(addressReads.length).toBeGreaterThanOrEqual(1);
     expect(addressReads[0]!.source).toBe('processUser');
     expect(addressReads[0]!.targetLabel).toBe('Property');
+  });
+
+  it('populates field metadata (visibility, declaredType) on Property nodes', () => {
+    const properties = getNodesByLabelFull(result, 'Property');
+
+    const city = properties.find(p => p.name === 'city');
+    expect(city).toBeDefined();
+    // Swift default visibility is 'internal', not 'public'
+    expect(city!.properties.visibility).toBe('internal');
+    expect(city!.properties.isStatic).toBe(false);
+    expect(city!.properties.declaredType).toBe('String');
+
+    const addr = properties.find(p => p.name === 'address');
+    expect(addr).toBeDefined();
+    expect(addr!.properties.visibility).toBe('internal');
+    expect(addr!.properties.declaredType).toBe('Address');
   });
 });
 

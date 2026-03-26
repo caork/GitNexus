@@ -16,6 +16,8 @@ import { extractKotlinNamedBindings } from '../named-bindings/kotlin.js';
 import { appendKotlinWildcard } from '../import-resolvers/jvm.js';
 import { KOTLIN_QUERIES } from '../tree-sitter-queries.js';
 import { isKotlinClassMethod } from '../utils/ast-helpers.js';
+import { createFieldExtractor } from '../field-extractors/generic.js';
+import { kotlinConfig } from '../field-extractors/configs/jvm.js';
 
 export const kotlinProvider = defineLanguage({
   id: SupportedLanguages.Kotlin,
@@ -27,6 +29,7 @@ export const kotlinProvider = defineLanguage({
   namedBindingExtractor: extractKotlinNamedBindings,
   importPathPreprocessor: appendKotlinWildcard,
   mroStrategy: 'implements-split',
+  fieldExtractor: createFieldExtractor(kotlinConfig),
   labelOverride: (functionNode, defaultLabel) => {
     if (defaultLabel !== 'Function') return defaultLabel;
     if (isKotlinClassMethod(functionNode)) return 'Method';

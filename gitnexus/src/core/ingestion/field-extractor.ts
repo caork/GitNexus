@@ -26,25 +26,6 @@ export interface FieldExtractor {
 }
 
 /**
- * Registry of field extractors by language
- */
-export class FieldExtractorRegistry {
-  private extractors = new Map<SupportedLanguages, FieldExtractor>();
-  
-  register(extractor: FieldExtractor): void {
-    this.extractors.set(extractor.language, extractor);
-  }
-  
-  get(language: SupportedLanguages): FieldExtractor | undefined {
-    return this.extractors.get(language);
-  }
-  
-  has(language: SupportedLanguages): boolean {
-    return this.extractors.has(language);
-  }
-}
-
-/**
  * Base class for field extractors with common utilities
  */
 export abstract class BaseFieldExtractor implements FieldExtractor {

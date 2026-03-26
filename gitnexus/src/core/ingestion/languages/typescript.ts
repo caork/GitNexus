@@ -14,6 +14,9 @@ import { tsExportChecker } from '../export-detection.js';
 import { resolveTypescriptImport, resolveJavascriptImport } from '../import-resolvers/standard.js';
 import { extractTsNamedBindings } from '../named-bindings/typescript.js';
 import { TYPESCRIPT_QUERIES, JAVASCRIPT_QUERIES } from '../tree-sitter-queries.js';
+import { typescriptFieldExtractor } from '../field-extractors/typescript.js';
+import { createFieldExtractor } from '../field-extractors/generic.js';
+import { javascriptConfig } from '../field-extractors/configs/typescript-javascript.js';
 
 export const typescriptProvider = defineLanguage({
   id: SupportedLanguages.TypeScript,
@@ -23,6 +26,7 @@ export const typescriptProvider = defineLanguage({
   exportChecker: tsExportChecker,
   importResolver: resolveTypescriptImport,
   namedBindingExtractor: extractTsNamedBindings,
+  fieldExtractor: typescriptFieldExtractor,
 });
 
 export const javascriptProvider = defineLanguage({
@@ -33,4 +37,5 @@ export const javascriptProvider = defineLanguage({
   exportChecker: tsExportChecker,
   importResolver: resolveJavascriptImport,
   namedBindingExtractor: extractTsNamedBindings,
+  fieldExtractor: createFieldExtractor(javascriptConfig),
 });

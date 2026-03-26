@@ -17,6 +17,8 @@ import { C_QUERIES, CPP_QUERIES } from '../tree-sitter-queries.js';
 
 import { isCppInsideClassOrStruct } from '../utils/ast-helpers.js';
 import type { LanguageProvider } from '../language-provider.js';
+import { createFieldExtractor } from '../field-extractors/generic.js';
+import { cConfig as cFieldConfig, cppConfig as cppFieldConfig } from '../field-extractors/configs/c-cpp.js';
 
 /** Label override shared by C and C++: skip function_definition captures inside class/struct
  *  bodies (they're duplicates of definition.method captures). */
@@ -33,6 +35,7 @@ export const cProvider = defineLanguage({
   exportChecker: cCppExportChecker,
   importResolver: resolveCImport,
   importSemantics: 'wildcard',
+  fieldExtractor: createFieldExtractor(cFieldConfig),
   labelOverride: cppLabelOverride,
 });
 
@@ -45,5 +48,6 @@ export const cppProvider = defineLanguage({
   importResolver: resolveCppImport,
   importSemantics: 'wildcard',
   mroStrategy: 'leftmost-base',
+  fieldExtractor: createFieldExtractor(cppFieldConfig),
   labelOverride: cppLabelOverride,
 });
