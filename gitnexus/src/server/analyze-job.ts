@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import type { ChildProcess } from 'child_process';
 
 export interface AnalyzeJobProgress {
   phase: string;
@@ -32,9 +33,12 @@ export interface AnalyzeJob {
 
 const JOB_TTL_MS = 60 * 60 * 1000; // 1 hour
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const JOB_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 export class JobManager {
   private jobs = new Map<string, AnalyzeJob>();
+  private children = new Map<string, ChildProcess>();
+  private timeouts = new Map<string, ReturnType<typeof setTimeout>>();
   private emitter = new EventEmitter();
   private cleanupTimer: ReturnType<typeof setInterval>;
 
@@ -103,6 +107,45 @@ export class JobManager {
     }
   }
 
+  /** Register a child process for a job — enables cancellation and timeout. */
+  registerChild(jobId: string, child: ChildProcess) {
+    this.children.set(jobId, child);
+
+    // 30-minute timeout
+    const timer = setTimeout(() => {
+      const job = this.jobs.get(jobId);
+      if (job && !this.isTerminal(job.status)) {
+        this.cancelJob(jobId, 'Analysis timed out (30 minute limit)');
+      }
+    }, JOB_TIMEOUT_MS);
+    this.timeouts.set(jobId, timer);
+
+    // Clean up tracking when child exits
+    child.on('exit', () => {
+      this.children.delete(jobId);
+      const t = this.timeouts.get(jobId);
+      if (t) { clearTimeout(t); this.timeouts.delete(jobId); }
+    });
+  }
+
+  /** Cancel a running job — sends SIGTERM to child process. */
+  cancelJob(jobId: string, reason?: string): boolean {
+    const job = this.jobs.get(jobId);
+    if (!job || this.isTerminal(job.status)) return false;
+
+    const child = this.children.get(jobId);
+    if (child) {
+      child.kill('SIGTERM');
+    }
+
+    this.updateJob(jobId, {
+      status: 'failed',
+      error: reason || 'Analysis cancelled',
+    });
+
+    return true;
+  }
+
   /** Subscribe to progress events for a job. Returns unsubscribe function. */
   onProgress(jobId: string, listener: (progress: AnalyzeJobProgress) => void): () => void {
     const event = `progress:${jobId}`;
@@ -111,6 +154,18 @@ export class JobManager {
   }
 
   dispose() {
+    // Kill all active child processes
+    for (const child of this.children.values()) {
+      child.kill('SIGTERM');
+    }
+    this.children.clear();
+
+    // Clear all timeouts
+    for (const timer of this.timeouts.values()) {
+      clearTimeout(timer);
+    }
+    this.timeouts.clear();
+
     clearInterval(this.cleanupTimer);
     this.emitter.removeAllListeners();
   }

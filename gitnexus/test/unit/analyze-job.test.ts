@@ -108,4 +108,23 @@ describe('JobManager', () => {
 
     expect(events).toHaveLength(1);
   });
+
+  it('cancelJob sets status to failed with reason', () => {
+    const job = manager.createJob({ repoUrl: 'https://github.com/user/repo' });
+    manager.updateJob(job.id, { status: 'analyzing' });
+    const cancelled = manager.cancelJob(job.id, 'Cancelled by user');
+    expect(cancelled).toBe(true);
+    expect(manager.getJob(job.id)!.status).toBe('failed');
+    expect(manager.getJob(job.id)!.error).toBe('Cancelled by user');
+  });
+
+  it('cancelJob returns false for terminal jobs', () => {
+    const job = manager.createJob({ repoUrl: 'https://github.com/user/repo' });
+    manager.updateJob(job.id, { status: 'complete' });
+    expect(manager.cancelJob(job.id)).toBe(false);
+  });
+
+  it('cancelJob returns false for unknown job', () => {
+    expect(manager.cancelJob('nonexistent')).toBe(false);
+  });
 });

@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, DragEvent } from 'react';
 import { Upload, FileArchive, Github, Loader2, ArrowRight, Key, Eye, EyeOff, Globe, X, Zap } from '@/lib/lucide-icons';
 import { cloneRepository, parseGitHubUrl } from '../services/git-clone';
 import { connectToServer, type ConnectToServerResult } from '../services/server-connection';
-import { startAnalyze, streamAnalyzeProgress, type AnalyzeJobProgress } from '../services/backend';
+import { startAnalyze, streamAnalyzeProgress, cancelAnalyze, type AnalyzeJobProgress } from '../services/backend';
 import { AnalyzeProgress } from './AnalyzeProgress';
 import { FileEntry } from '../services/zip';
 
@@ -50,6 +50,7 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onServerAn
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzeProgress, setAnalyzeProgress] = useState<AnalyzeJobProgress>({ phase: 'queued', percent: 0, message: 'Starting...' });
   const analyzeAbortRef = useRef<AbortController | null>(null);
+  const analyzeJobIdRef = useRef<string | null>(null);
 
   const handleAnalyze = async () => {
     if (!analyzeUrl.trim()) return;
@@ -60,6 +61,7 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onServerAn
     try {
       const serverBase = serverUrl.trim() || window.location.origin;
       const { jobId } = await startAnalyze({ url: analyzeUrl.trim() });
+      analyzeJobIdRef.current = jobId;
 
       analyzeAbortRef.current = streamAnalyzeProgress(
         jobId,
@@ -89,6 +91,10 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onServerAn
 
   const handleCancelAnalyze = () => {
     analyzeAbortRef.current?.abort();
+    if (analyzeJobIdRef.current) {
+      cancelAnalyze(analyzeJobIdRef.current).catch(() => {});
+      analyzeJobIdRef.current = null;
+    }
     setIsAnalyzing(false);
   };
 

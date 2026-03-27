@@ -521,6 +521,9 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
             }
           });
 
+          // Register child for cancellation + timeout tracking
+          jobManager.registerChild(job.id, child);
+
           // Send start command to child
           child.send({
             type: 'start',
@@ -618,6 +621,21 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     req.on('close', () => {
       unsubscribe();
     });
+  });
+
+  // DELETE /api/analyze/:jobId — cancel a running analysis job
+  app.delete('/api/analyze/:jobId', (req, res) => {
+    const job = jobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    if (job.status === 'complete' || job.status === 'failed') {
+      res.status(400).json({ error: `Job already ${job.status}` });
+      return;
+    }
+    jobManager.cancelJob(req.params.jobId, 'Cancelled by user');
+    res.json({ id: job.id, status: 'failed', error: 'Cancelled by user' });
   });
 
   // Global error handler — catch anything the route handlers miss

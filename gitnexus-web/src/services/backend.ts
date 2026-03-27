@@ -283,6 +283,19 @@ export const getAnalyzeStatus = async (
 };
 
 /**
+ * Cancel a running analysis job.
+ */
+export const cancelAnalyze = async (
+  jobId: string,
+): Promise<void> => {
+  const response = await fetchWithTimeout(
+    `${backendUrl}/api/analyze/${encodeURIComponent(jobId)}`,
+    { method: 'DELETE' },
+  );
+  await assertOk(response);
+};
+
+/**
  * Stream analysis progress via SSE using fetch + ReadableStream.
  * Returns an AbortController to cancel the stream.
  */
