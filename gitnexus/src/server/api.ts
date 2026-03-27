@@ -815,8 +815,11 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       }
 
       const job = embedJobManager.createJob({ repoPath: entry.storagePath });
-      job.repoName = entry.name;
-      job.status = 'analyzing';
+      embedJobManager.updateJob(job.id, {
+        repoName: entry.name,
+        status: 'analyzing' as any,
+        progress: { phase: 'analyzing', percent: 0, message: 'Starting embedding generation...' },
+      });
 
       // Run embedding pipeline asynchronously
       (async () => {
@@ -978,6 +981,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   const shutdown = async () => {
     server.close();
     jobManager.dispose();
+    embedJobManager.dispose();
     await cleanupMcp();
     await closeLbug();
     await backend.disconnect();
