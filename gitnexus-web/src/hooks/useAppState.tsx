@@ -573,12 +573,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   }, [projectName]);
 
   const sendChatMessage = useCallback(async (message: string): Promise<void> => {
-    const api = apiRef.current;
-    if (!api) {
-      setAgentError('Worker not initialized');
-      return;
-    }
-
     // Refresh Code panel for the new question: keep user-pinned refs, clear old AI citations
     clearAICodeReferences();
     // Also clear previous tool-driven AI highlights (highlight_in_graph)
@@ -587,7 +581,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     if (!isAgentReady) {
       // Try to initialize first
       await initializeAgent();
-      if (!apiRef.current) return;
+      if (!agentRef.current) return;
     }
 
     // Add user message
