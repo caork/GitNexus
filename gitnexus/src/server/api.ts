@@ -280,6 +280,22 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   const cleanupMcp = mountMCPEndpoints(app, backend);
   const jobManager = new JobManager();
 
+  // Shared repo lock — prevents concurrent analyze + embed on the same repo path,
+  // which would corrupt LadybugDB (analyze calls closeLbug + initLbug while embed has queries in flight).
+  const activeRepoPaths = new Set<string>();
+
+  const acquireRepoLock = (repoPath: string, jobType: 'analysis' | 'embedding'): string | null => {
+    if (activeRepoPaths.has(repoPath)) {
+      return `Another job is already active for this repository`;
+    }
+    activeRepoPaths.add(repoPath);
+    return null;
+  };
+
+  const releaseRepoLock = (repoPath: string): void => {
+    activeRepoPaths.delete(repoPath);
+  };
+
   // Helper: resolve a repo by name from the global registry, or default to first
   const resolveRepo = async (repoName?: string) => {
     const repos = await listRegisteredRepos();
@@ -688,11 +704,14 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         return;
       }
 
-      // Path validation: require absolute path, reject traversal
+      // Path validation: require absolute path, reject traversal (e.g. /tmp/../etc/passwd)
       if (repoLocalPath) {
-        const resolved = path.resolve(repoLocalPath);
-        if (resolved !== repoLocalPath && !path.isAbsolute(repoLocalPath)) {
+        if (!path.isAbsolute(repoLocalPath)) {
           res.status(400).json({ error: '"path" must be an absolute path' });
+          return;
+        }
+        if (path.normalize(repoLocalPath) !== path.resolve(repoLocalPath)) {
+          res.status(400).json({ error: '"path" must not contain traversal sequences' });
           return;
         }
       }
@@ -710,8 +729,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
 
       // Start async work — don't await
       (async () => {
+        let targetPath = repoLocalPath;
         try {
-          let targetPath = repoLocalPath;
 
           // Clone if URL provided
           if (repoUrl && !repoLocalPath) {
@@ -735,6 +754,13 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
             throw new Error('No target path resolved');
           }
 
+          // Acquire shared repo lock to prevent concurrent embed jobs on same repo
+          const lockErr = acquireRepoLock(targetPath, 'analysis');
+          if (lockErr) {
+            jobManager.updateJob(job.id, { status: 'failed', error: lockErr });
+            return;
+          }
+
           jobManager.updateJob(job.id, { repoPath: targetPath, status: 'analyzing' });
 
           // Fork child process with 8GB heap
@@ -751,6 +777,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
                 progress: { phase: msg.phase, percent: msg.percent, message: msg.message },
               });
             } else if (msg.type === 'complete') {
+              releaseRepoLock(targetPath!);
               jobManager.updateJob(job.id, {
                 status: 'complete',
                 repoName: msg.result.repoName,
@@ -758,6 +785,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
               // Reinitialize backend so it picks up the new repo
               backend.init().catch(() => {});
             } else if (msg.type === 'error') {
+              releaseRepoLock(targetPath!);
               jobManager.updateJob(job.id, {
                 status: 'failed',
                 error: msg.message,
@@ -766,6 +794,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
           });
 
           child.on('error', (err) => {
+            releaseRepoLock(targetPath!);
             jobManager.updateJob(job.id, {
               status: 'failed',
               error: `Worker process error: ${err.message}`,
@@ -775,6 +804,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
           child.on('exit', (code) => {
             const currentJob = jobManager.getJob(job.id);
             if (currentJob && currentJob.status !== 'complete' && currentJob.status !== 'failed') {
+              releaseRepoLock(targetPath!);
               jobManager.updateJob(job.id, {
                 status: 'failed',
                 error: `Worker exited unexpectedly (code ${code})`,
@@ -793,6 +823,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
           });
 
         } catch (err: any) {
+          if (targetPath) releaseRepoLock(targetPath);
           jobManager.updateJob(job.id, {
             status: 'failed',
             error: err.message || 'Analysis failed',
@@ -800,7 +831,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         }
       })();
 
-      res.status(202).json({ jobId: job.id, status: 'queued' });
+      res.status(202).json({ jobId: job.id, status: job.status });
     } catch (err: any) {
       if (err.message?.includes('already in progress')) {
         res.status(409).json({ error: err.message });
@@ -861,12 +892,33 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         return;
       }
 
+      // Check shared repo lock — prevent concurrent analyze + embed on same repo
+      const repoLockPath = entry.storagePath;
+      const lockErr = acquireRepoLock(repoLockPath, 'embedding');
+      if (lockErr) {
+        res.status(409).json({ error: lockErr });
+        return;
+      }
+
       const job = embedJobManager.createJob({ repoPath: entry.storagePath });
       embedJobManager.updateJob(job.id, {
         repoName: entry.name,
         status: 'analyzing' as any,
         progress: { phase: 'analyzing', percent: 0, message: 'Starting embedding generation...' },
       });
+
+      // 30-minute timeout for embedding jobs (same as analyze jobs)
+      const EMBED_TIMEOUT_MS = 30 * 60 * 1000;
+      const embedTimeout = setTimeout(() => {
+        const current = embedJobManager.getJob(job.id);
+        if (current && current.status !== 'complete' && current.status !== 'failed') {
+          releaseRepoLock(repoLockPath);
+          embedJobManager.updateJob(job.id, {
+            status: 'failed',
+            error: 'Embedding timed out (30 minute limit)',
+          });
+        }
+      }, EMBED_TIMEOUT_MS);
 
       // Run embedding pipeline asynchronously
       (async () => {
@@ -893,8 +945,12 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
             );
           });
 
+          clearTimeout(embedTimeout);
+          releaseRepoLock(repoLockPath);
           embedJobManager.updateJob(job.id, { status: 'complete' });
         } catch (err: any) {
+          clearTimeout(embedTimeout);
+          releaseRepoLock(repoLockPath);
           embedJobManager.updateJob(job.id, {
             status: 'failed',
             error: err.message || 'Embedding generation failed',

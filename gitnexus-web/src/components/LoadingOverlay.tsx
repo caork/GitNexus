@@ -1,4 +1,4 @@
-import { PipelineProgress } from '../types/pipeline';
+import type { PipelineProgress } from 'gitnexus-shared';
 
 interface LoadingOverlayProps {
   progress: PipelineProgress;

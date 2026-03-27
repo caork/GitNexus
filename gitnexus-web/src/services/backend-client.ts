@@ -90,73 +90,101 @@ export interface SSEHandlers<T = unknown> {
 /**
  * Generic SSE stream consumer using fetch + ReadableStream.
  * Returns an AbortController to cancel the stream.
+ * Automatically reconnects on network drops (up to 3 retries with backoff).
  */
 export function streamSSE<T = unknown>(url: string, handlers: SSEHandlers<T>): AbortController {
   const controller = new AbortController();
+  const MAX_RETRIES = 3;
+  const BASE_DELAY_MS = 1_000;
 
-  (async () => {
-    try {
-      const response = await fetch(url, { signal: controller.signal });
-      if (!response.ok) {
-        handlers.onError?.(`Server returned ${response.status}`);
-        return;
-      }
+  let lastEventId = '';
 
-      const reader = response.body?.getReader();
-      if (!reader) {
-        handlers.onError?.('No response body');
-        return;
-      }
+  const connect = (retryCount: number) => {
+    if (controller.signal.aborted) return;
 
-      const decoder = new TextDecoder();
-      let buffer = '';
+    (async () => {
+      try {
+        const headers: Record<string, string> = {};
+        if (lastEventId) {
+          headers['Last-Event-ID'] = lastEventId;
+        }
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const response = await fetch(url, { signal: controller.signal, headers });
+        if (!response.ok) {
+          handlers.onError?.(`Server returned ${response.status}`);
+          return;
+        }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        const reader = response.body?.getReader();
+        if (!reader) {
+          handlers.onError?.('No response body');
+          return;
+        }
 
-        let eventType = 'message';
-        for (const line of lines) {
-          if (line.startsWith('id: ')) {
-            // Event ID — skip (handled by EventSource natively; here for manual parsing)
-            continue;
-          }
-          if (line.startsWith(':')) {
-            // SSE comment (heartbeat) — skip
-            continue;
-          }
-          if (line.startsWith('event: ')) {
-            eventType = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            try {
-              const parsed = JSON.parse(line.slice(6)) as T;
-              if (eventType === 'complete') {
-                handlers.onComplete?.(parsed);
-                return;
-              } else if (eventType === 'failed') {
-                const errData = parsed as any;
-                handlers.onError?.(errData?.error || 'Job failed');
-                return;
-              } else {
-                handlers.onMessage?.(parsed);
-              }
-            } catch {
-              // Skip malformed JSON
+        // Reset retry count on successful connection
+        retryCount = 0;
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          let eventType = 'message';
+          for (const line of lines) {
+            if (line.startsWith('id: ')) {
+              lastEventId = line.slice(4).trim();
+              continue;
             }
-            eventType = 'message';
+            if (line.startsWith(':')) {
+              // SSE comment (heartbeat) — skip
+              continue;
+            }
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith('data: ')) {
+              try {
+                const parsed = JSON.parse(line.slice(6)) as T;
+                if (eventType === 'complete') {
+                  handlers.onComplete?.(parsed);
+                  return;
+                } else if (eventType === 'failed') {
+                  const errData = parsed as any;
+                  handlers.onError?.(errData?.error || 'Job failed');
+                  return;
+                } else {
+                  handlers.onMessage?.(parsed);
+                }
+              } catch {
+                // Skip malformed JSON
+              }
+              eventType = 'message';
+            }
           }
         }
-      }
-    } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      handlers.onError?.(err instanceof Error ? err.message : 'Stream error');
-    }
-  })();
 
+        // Stream ended without terminal event — try to reconnect
+        if (!controller.signal.aborted && retryCount < MAX_RETRIES) {
+          setTimeout(() => connect(retryCount + 1), BASE_DELAY_MS * 2 ** retryCount);
+        }
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        // Network error — attempt reconnect with backoff
+        if (!controller.signal.aborted && retryCount < MAX_RETRIES) {
+          setTimeout(() => connect(retryCount + 1), BASE_DELAY_MS * 2 ** retryCount);
+        } else {
+          handlers.onError?.(err instanceof Error ? err.message : 'Stream error');
+        }
+      }
+    })();
+  };
+
+  connect(0);
   return controller;
 }
 
@@ -170,6 +198,11 @@ export const setBackendUrl = (url: string): void => {
 
 export const getBackendUrl = (): string => _backendUrl;
 
+/**
+ * Normalize a user-entered server URL into a base URL suitable for setBackendUrl().
+ * Adds protocol if missing, strips trailing slashes, and strips a trailing /api suffix
+ * (since all API methods append their own /api/... paths to _backendUrl).
+ */
 export function normalizeServerUrl(input: string): string {
   let url = input.trim().replace(/\/+$/, '');
 
@@ -181,9 +214,8 @@ export function normalizeServerUrl(input: string): string {
     }
   }
 
-  if (!url.endsWith('/api')) {
-    url = `${url}/api`;
-  }
+  // Strip /api suffix if present — _backendUrl stores the base, not the /api path
+  url = url.replace(/\/api$/, '');
 
   return url;
 }
@@ -523,8 +555,7 @@ export async function connectToServer(
   repoName?: string,
 ): Promise<ConnectResult> {
   const baseUrl = normalizeServerUrl(url);
-  // Store the base URL (without /api) for other calls
-  setBackendUrl(baseUrl.replace(/\/api$/, ''));
+  setBackendUrl(baseUrl);
 
   onProgress?.('validating', 0, null);
   const repoInfo = await fetchRepoInfo(repoName);

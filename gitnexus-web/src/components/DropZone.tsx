@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Loader2, ArrowRight, Globe, X, Zap } from '@/lib/lucide-icons';
-import { connectToServer, type ConnectResult, startAnalyze, streamAnalyzeProgress, cancelAnalyze, type JobProgress } from '../services/backend-client';
+import { connectToServer, type ConnectResult, startAnalyze, streamAnalyzeProgress, cancelAnalyze, type JobProgress, setBackendUrl, normalizeServerUrl } from '../services/backend-client';
 import { AnalyzeProgress } from './AnalyzeProgress';
 
 interface DropZoneProps {
@@ -48,6 +48,8 @@ export const DropZone = ({ onServerConnect, onServerAnalyze }: DropZoneProps) =>
 
     try {
       const serverBase = serverUrl.trim() || window.location.origin;
+      // Ensure backend URL is set before calling startAnalyze (it uses the module-level _backendUrl)
+      setBackendUrl(normalizeServerUrl(serverBase));
       const { jobId } = await startAnalyze({ url: analyzeUrl.trim() });
       analyzeJobIdRef.current = jobId;
 
