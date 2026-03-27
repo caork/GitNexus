@@ -28,7 +28,7 @@ try { Dart = _require('tree-sitter-dart'); } catch {}
 // tree-sitter-kotlin is an optionalDependency — may not be installed
 let Kotlin: any = null;
 try { Kotlin = _require('tree-sitter-kotlin'); } catch {}
-import { getLanguageFromFilename } from '../utils/language-detection.js';
+import { getLanguageFromFilename } from 'gitnexus-shared';
 import {
   FUNCTION_NODE_TYPES,
   extractFunctionName,

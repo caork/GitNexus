@@ -21,6 +21,7 @@ export type {
 
 // Language support
 export { SupportedLanguages } from './languages.js';
+export { getLanguageFromFilename, getSyntaxLanguageFromFilename } from './language-detection.js';
 
 // Pipeline progress
 export type {

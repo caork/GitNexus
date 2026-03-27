@@ -1,8 +1,10 @@
 /**
  * Language Detection — maps file paths to SupportedLanguages enum values.
+ *
+ * Shared between CLI (ingestion pipeline) and web (syntax highlighting).
  */
 
-import { SupportedLanguages } from 'gitnexus-shared';
+import { SupportedLanguages } from './languages.js';
 
 /** Ruby extensionless filenames recognised as Ruby source */
 const RUBY_EXTENSIONLESS_FILES = new Set(['Rakefile', 'Gemfile', 'Guardfile', 'Vagrantfile', 'Brewfile']);
@@ -52,8 +54,45 @@ export const getLanguageFromFilename = (filename: string): SupportedLanguages | 
   if (RUBY_EXTENSIONLESS_FILES.has(basename)) {
     return SupportedLanguages.Ruby;
   }
-  // Swift (extensions)
+  // Swift
   if (filename.endsWith('.swift')) return SupportedLanguages.Swift;
+  // Dart
   if (filename.endsWith('.dart')) return SupportedLanguages.Dart;
+  // COBOL
+  if (filename.endsWith('.cbl') || filename.endsWith('.cob') ||
+      filename.endsWith('.cpy') || filename.endsWith('.cobol')) {
+    return SupportedLanguages.Cobol;
+  }
   return null;
+};
+
+/** Non-code file extensions → Prism-compatible syntax identifiers */
+const AUXILIARY_SYNTAX_MAP: Record<string, string> = {
+  json: 'json', yaml: 'yaml', yml: 'yaml',
+  md: 'markdown', mdx: 'markdown',
+  html: 'markup', htm: 'markup', erb: 'markup', xml: 'markup',
+  css: 'css', scss: 'css', sass: 'css',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  sql: 'sql', toml: 'toml', ini: 'ini',
+  dockerfile: 'docker',
+};
+
+/** Extensionless filenames → Prism-compatible syntax identifiers */
+const AUXILIARY_BASENAME_MAP: Record<string, string> = {
+  Makefile: 'makefile', Dockerfile: 'docker',
+};
+
+/**
+ * Map file path to a Prism-compatible syntax highlight language string.
+ * Covers all SupportedLanguages (code files) plus common non-code formats.
+ * Returns 'text' for unrecognised files.
+ */
+export const getSyntaxLanguageFromFilename = (filePath: string): string => {
+  const lang = getLanguageFromFilename(filePath);
+  if (lang) return lang;
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  if (ext && ext in AUXILIARY_SYNTAX_MAP) return AUXILIARY_SYNTAX_MAP[ext];
+  const basename = filePath.split('/').pop() || '';
+  if (basename in AUXILIARY_BASENAME_MAP) return AUXILIARY_BASENAME_MAP[basename];
+  return 'text';
 };
