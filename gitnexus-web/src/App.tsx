@@ -43,10 +43,10 @@ const AppContent = () => {
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
 
-  const handleServerConnect = useCallback((result: ConnectResult): Promise<void> => {
+  const handleServerConnect = useCallback(async (result: ConnectResult): Promise<void> => {
     // Extract project name from repoPath
-    const repoPath = result.repoInfo.repoPath;
-    const parts = repoPath.split('/').filter(p => p && !p.startsWith('.'));
+    const repoPath = result.repoInfo.repoPath ?? result.repoInfo.path;
+    const parts = (repoPath || '').split('/').filter(p => p && !p.startsWith('.'));
     const projectName = parts[parts.length - 1] || parts[0] || 'server-project';
     setProjectName(projectName);
 
@@ -60,34 +60,19 @@ const AppContent = () => {
     }
     setGraph(graph);
 
-    // Set file contents from extracted File node content
-    const fileMap = new Map<string, string>();
-    for (const [path, content] of Object.entries(result.fileContents)) {
-      fileMap.set(path, content);
-    }
-    setFileContents(fileMap);
-
     // Transition directly to exploring view
     setViewMode('exploring');
 
-    // Load graph into LadybugDB (in-browser WASM database) for Nexus AI queries,
-    // then initialize agent once the database is ready
-    const loadGraphPromise = loadServerGraph(result.nodes, result.relationships, result.fileContents)
-      .then(() => {
-        if (getActiveProviderConfig()) {
-          return initializeAgent(projectName);
-        }
-      })
-      .then(() => {
-        startEmbeddingsWithFallback();
-      })
-      .catch((err) => {
-        console.warn('Failed to load graph into LadybugDB:', err);
-        // Agent won't work but graph visualization still does
-      });
-
-    return loadGraphPromise;
-  }, [setViewMode, setGraph, setFileContents, setProjectName, loadServerGraph, initializeAgent, startEmbeddingsWithFallback]);
+    // Initialize agent with backend queries, then start embeddings
+    try {
+      if (getActiveProviderConfig()) {
+        await initializeAgent(projectName);
+      }
+      startEmbeddingsWithFallback();
+    } catch (err) {
+      console.warn('Failed to initialize agent:', err);
+    }
+  }, [setViewMode, setGraph, setProjectName, initializeAgent, startEmbeddingsWithFallback]);
 
   // Auto-connect when ?server query param is present (bookmarkable shortcut)
   const autoConnectRan = useRef(false);
