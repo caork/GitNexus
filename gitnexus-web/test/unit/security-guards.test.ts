@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NODE_TABLES, REL_TYPES } from '../../src/core/lbug/schema';
+import { NODE_TABLES, REL_TYPES } from 'gitnexus-shared';
 
 // ---------------------------------------------------------------------------
 // Recreate the security guards locally so we can test the exact logic used in
