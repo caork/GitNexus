@@ -1,6 +1,6 @@
 import { Search, Settings, HelpCircle, Sparkles, Github, Star, ChevronDown } from '@/lib/lucide-icons';
 import { useAppState } from '../hooks/useAppState';
-import type { RepoSummary } from '../services/server-connection';
+import type { BackendRepo } from '../services/backend-client';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { GraphNode } from 'gitnexus-shared';
 import { EmbeddingStatus } from './EmbeddingStatus';
@@ -20,7 +20,7 @@ const NODE_TYPE_COLORS: Record<string, string> = {
 
 interface HeaderProps {
   onFocusNode?: (nodeId: string) => void;
-  availableRepos?: RepoSummary[];
+  availableRepos?: BackendRepo[];
   onSwitchRepo?: (repoName: string) => void;
 }
 

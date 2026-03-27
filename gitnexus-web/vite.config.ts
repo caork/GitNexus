@@ -1,26 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import wasm from 'vite-plugin-wasm';
-import topLevelAwait from 'vite-plugin-top-level-await';
-import { viteStaticCopy } from 'vite-plugin-static-copy';
 import path from 'path';
 
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    wasm(),
-    topLevelAwait(),
-    // Copy lbug-wasm worker file to assets folder for production
-    viteStaticCopy({
-      targets: [
-        {
-          src: 'node_modules/@ladybugdb/wasm-core/lbug_wasm_worker.js',
-          dest: 'assets'
-        }
-      ]
-    }),
   ],
   resolve: {
     alias: {
@@ -32,31 +18,10 @@ export default defineConfig({
       'mermaid': path.resolve(__dirname, 'node_modules/mermaid/dist/mermaid.esm.min.mjs'),
     },
   },
-  // Optimize deps - exclude lbug-wasm from pre-bundling (it has WASM files)
-  optimizeDeps: {
-    exclude: ['@ladybugdb/wasm-core'],
-  },
-  // Required for LadybugDB WASM (SharedArrayBuffer needs Cross-Origin Isolation)
   server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
     // Allow serving files from node_modules
     fs: {
       allow: ['..'],
     },
-  },
-  // Also set for preview/production builds
-  preview: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
-  // Worker configuration
-  worker: {
-    format: 'es',
-    plugins: () => [wasm(), topLevelAwait()],
   },
 });

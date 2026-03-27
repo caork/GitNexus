@@ -1,5 +1,5 @@
 import { Server, ArrowRight } from '@/lib/lucide-icons';
-import { BackendRepo } from '../services/backend';
+import { type BackendRepo } from '../services/backend-client';
 
 interface BackendRepoSelectorProps {
   repos: BackendRepo[];

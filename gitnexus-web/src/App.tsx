@@ -11,7 +11,7 @@ import { FileTreePanel } from './components/FileTreePanel';
 import { CodeReferencesPanel } from './components/CodeReferencesPanel';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
-import { connectToServer, fetchRepos, normalizeServerUrl, type ConnectToServerResult } from './services/server-connection';
+import { connectToServer, fetchRepos, normalizeServerUrl, type ConnectResult } from './services/backend-client';
 import { ERROR_RESET_DELAY_MS } from './config/ui-constants';
 
 const AppContent = () => {
@@ -43,7 +43,7 @@ const AppContent = () => {
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
 
-  const handleServerConnect = useCallback((result: ConnectToServerResult): Promise<void> => {
+  const handleServerConnect = useCallback((result: ConnectResult): Promise<void> => {
     // Extract project name from repoPath
     const repoPath = result.repoInfo.repoPath;
     const parts = repoPath.split('/').filter(p => p && !p.startsWith('.'));

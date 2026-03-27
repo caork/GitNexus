@@ -5,7 +5,7 @@ import {
   setBackendUrl as setServiceUrl,
   getBackendUrl,
   type BackendRepo,
-} from '../services/backend';
+} from '../services/backend-client';
 import { BACKEND_URL_DEBOUNCE_MS, DEFAULT_BACKEND_URL } from '../config/ui-constants';
 
 // ── localStorage keys ────────────────────────────────────────────────────────

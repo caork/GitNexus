@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import type { AnalyzeJobProgress } from '../services/backend';
+import type { JobProgress as AnalyzeJobProgress } from '../services/backend-client';
 
 interface AnalyzeProgressProps {
   progress: AnalyzeJobProgress;

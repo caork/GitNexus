@@ -1,11 +1,10 @@
 import { useState, useRef } from 'react';
 import { Loader2, ArrowRight, Globe, X, Zap } from '@/lib/lucide-icons';
-import { connectToServer, type ConnectToServerResult } from '../services/server-connection';
-import { startAnalyze, streamAnalyzeProgress, cancelAnalyze, type AnalyzeJobProgress } from '../services/backend';
+import { connectToServer, type ConnectResult, startAnalyze, streamAnalyzeProgress, cancelAnalyze, type JobProgress } from '../services/backend-client';
 import { AnalyzeProgress } from './AnalyzeProgress';
 
 interface DropZoneProps {
-  onServerConnect?: (result: ConnectToServerResult, serverUrl?: string) => void;
+  onServerConnect?: (result: ConnectResult, serverUrl?: string) => void;
   onServerAnalyze?: (serverUrl: string, repoName: string) => void;
 }
 
@@ -37,7 +36,7 @@ export const DropZone = ({ onServerConnect, onServerAnalyze }: DropZoneProps) =>
   // Analyze state
   const [analyzeUrl, setAnalyzeUrl] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analyzeProgress, setAnalyzeProgress] = useState<AnalyzeJobProgress>({ phase: 'queued', percent: 0, message: 'Starting...' });
+  const [analyzeProgress, setAnalyzeProgress] = useState<JobProgress>({ phase: 'queued', percent: 0, message: 'Starting...' });
   const analyzeAbortRef = useRef<AbortController | null>(null);
   const analyzeJobIdRef = useRef<string | null>(null);
 
