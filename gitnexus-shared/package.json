@@ -13,14 +13,13 @@
     }
   },
   "scripts": {
-    "build": "tsc",
-    "prepare": "tsc"
+    "build": "tsc"
   },
   "files": [
     "dist",
     "src"
   ],
-  "dependencies": {
+  "devDependencies": {
     "typescript": "^6.0.2"
   }
 }
