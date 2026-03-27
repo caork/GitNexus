@@ -2,7 +2,7 @@ import { Search, Settings, HelpCircle, Sparkles, Github, Star, ChevronDown } fro
 import { useAppState } from '../hooks/useAppState';
 import type { RepoSummary } from '../services/server-connection';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { GraphNode } from '../core/graph/types';
+import { GraphNode } from 'gitnexus-shared';
 import { EmbeddingStatus } from './EmbeddingStatus';
 
 // Color mapping for node types in search results

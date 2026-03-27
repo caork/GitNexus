@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react';
 import * as Comlink from 'comlink';
-import { KnowledgeGraph, GraphNode, GraphRelationship, NodeLabel } from '../core/graph/types';
-import { PipelineProgress } from '../types/pipeline';
+import type { GraphNode, GraphRelationship, NodeLabel, PipelineProgress } from 'gitnexus-shared';
+import type { KnowledgeGraph } from '../core/graph/types';
 import { createKnowledgeGraph } from '../core/graph/graph';
 import type { IngestionWorkerApi } from '../workers/ingestion.worker';
 import type { EmbeddingProgress, SemanticSearchResult } from '../core/embeddings/types';

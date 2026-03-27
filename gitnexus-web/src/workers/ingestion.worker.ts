@@ -11,7 +11,8 @@ import type { EmbeddingProgress, SemanticSearchResult } from '../core/embeddings
 import type { ProviderConfig, AgentStreamChunk } from '../core/llm/types';
 import { createGraphRAGAgent, streamAgentResponse, type AgentMessage, createChatModel } from '../core/llm/agent';
 import { createKnowledgeGraph } from '../core/graph/graph';
-import type { GraphNode, GraphRelationship, KnowledgeGraph } from '../core/graph/types';
+import type { GraphNode, GraphRelationship } from 'gitnexus-shared';
+import type { KnowledgeGraph } from '../core/graph/types';
 import { SystemMessage } from '@langchain/core/messages';
 import { enrichClustersBatch, CommunityNode, ClusterMemberInfo, ClusterEnrichment } from '../core/ingestion/cluster-enricher';
 import { buildCodebaseContext, type CodebaseContext } from '../core/llm/context-builder';

@@ -1,4 +1,5 @@
-import { GraphNode, GraphRelationship, KnowledgeGraph } from '../core/graph/types.js';
+import type { GraphNode, GraphRelationship } from 'gitnexus-shared';
+import type { KnowledgeGraph } from '../core/graph/types.js';
 import { CommunityDetectionResult } from '../core/ingestion/community-processor.js';
 import { ProcessDetectionResult } from '../core/ingestion/process-processor.js';
 

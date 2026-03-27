@@ -1,5 +1,6 @@
 import Graph from 'graphology';
-import { KnowledgeGraph, NodeLabel } from '../core/graph/types';
+import type { NodeLabel } from 'gitnexus-shared';
+import type { KnowledgeGraph } from '../core/graph/types';
 import { NODE_COLORS, NODE_SIZES, getCommunityColor } from './constants';
 
 export interface SigmaNodeAttributes {

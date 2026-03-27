@@ -10,10 +10,11 @@
  * Processes help agents understand how features work through the codebase.
  */
 
-import { KnowledgeGraph, GraphNode, GraphRelationship, NodeLabel } from '../graph/types.js';
+import type { GraphNode, GraphRelationship, NodeLabel } from 'gitnexus-shared';
+import { KnowledgeGraph } from '../graph/types.js';
 import { CommunityMembership } from './community-processor.js';
 import { calculateEntryPointScore, isTestFile } from './entry-point-scoring.js';
-import { SupportedLanguages } from '../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 
 const isDev = process.env.NODE_ENV === 'development';
 

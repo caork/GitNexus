@@ -1,23 +1,19 @@
 /**
- * Re-export shared graph types from gitnexus-shared.
+ * Web-specific graph types.
  *
- * Web-specific additions (KnowledgeGraph interface) are defined here.
- * Core types (NodeLabel, GraphNode, etc.) come from the shared package.
+ * Shared types (NodeLabel, GraphNode, etc.) should be imported
+ * directly from 'gitnexus-shared' at call sites.
+ *
+ * This file only defines web-specific additions.
  */
-export type {
-  NodeLabel,
-  NodeProperties,
-  RelationshipType,
-  GraphNode,
-  GraphRelationship,
-} from 'gitnexus-shared';
+import type { GraphNode, GraphRelationship } from 'gitnexus-shared';
 
-// Web-specific: in-memory graph container (not shared — CLI version has more methods)
+// Web-specific: in-memory graph container (simpler than CLI version)
 export interface KnowledgeGraph {
-  nodes: import('gitnexus-shared').GraphNode[];
-  relationships: import('gitnexus-shared').GraphRelationship[];
+  nodes: GraphNode[];
+  relationships: GraphRelationship[];
   nodeCount: number;
   relationshipCount: number;
-  addNode: (node: import('gitnexus-shared').GraphNode) => void;
-  addRelationship: (relationship: import('gitnexus-shared').GraphRelationship) => void;
+  addNode: (node: GraphNode) => void;
+  addRelationship: (relationship: GraphRelationship) => void;
 }

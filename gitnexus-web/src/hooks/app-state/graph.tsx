@@ -1,5 +1,6 @@
 import { createContext, useContext, useCallback, useMemo, useState, ReactNode } from 'react';
-import type { KnowledgeGraph, GraphNode, NodeLabel } from '../../core/graph/types';
+import type { GraphNode, NodeLabel } from 'gitnexus-shared';
+import type { KnowledgeGraph } from '../../core/graph/types';
 import { DEFAULT_VISIBLE_LABELS, DEFAULT_VISIBLE_EDGES, type EdgeType } from '../../lib/constants';
 
 interface GraphStateContextValue {

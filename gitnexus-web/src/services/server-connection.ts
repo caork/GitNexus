@@ -1,4 +1,4 @@
-import { GraphNode, GraphRelationship } from '../core/graph/types';
+import { GraphNode, GraphRelationship } from 'gitnexus-shared';
 
 export interface RepoSummary {
   name: string;

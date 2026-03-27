@@ -3,7 +3,7 @@ import { Code, PanelLeftClose, PanelLeft, Trash2, X, Target, FileCode, Sparkles,
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useAppState } from '../hooks/useAppState';
-import type { GraphNode } from '../core/graph/types';
+import type { GraphNode } from 'gitnexus-shared';
 import { NODE_COLORS } from '../lib/constants';
 
 /** Map file extension to Prism syntax highlighter language identifier */

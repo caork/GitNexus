@@ -1,4 +1,4 @@
-import { NodeLabel } from '../core/graph/types';
+import type { NodeLabel } from 'gitnexus-shared';
 
 // Node colors by type - slightly muted for less visual noise
 export const NODE_COLORS: Record<NodeLabel, string> = {
