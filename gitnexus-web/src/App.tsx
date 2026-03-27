@@ -250,6 +250,34 @@ const AppContent = () => {
               .catch((e) => console.warn('Failed to fetch repo list:', e));
           }
         }}
+        onServerAnalyze={async (serverUrl, repoName) => {
+          // Analysis completed on server — now connect and load the graph
+          setViewMode('loading');
+          setProgress({ phase: 'extracting', percent: 5, message: 'Loading analyzed graph...', detail: 'Connecting to server' });
+          try {
+            const baseUrl = normalizeServerUrl(serverUrl);
+            const result = await connectToServer(serverUrl, (phase, downloaded, total) => {
+              if (phase === 'downloading') {
+                const pct = total ? Math.round((downloaded / total) * 90) + 5 : 50;
+                const mb = (downloaded / (1024 * 1024)).toFixed(1);
+                setProgress({ phase: 'extracting', percent: pct, message: 'Downloading graph...', detail: `${mb} MB downloaded` });
+              }
+            }, undefined, repoName);
+            await handleServerConnect(result);
+            setProgress(null);
+            setServerBaseUrl(baseUrl);
+            fetchRepos(baseUrl)
+              .then((repos) => setAvailableRepos(repos))
+              .catch((e) => console.warn('Failed to fetch repo list:', e));
+          } catch (err) {
+            setProgress({
+              phase: 'error', percent: 0,
+              message: 'Failed to load analyzed graph',
+              detail: err instanceof Error ? err.message : 'Unknown error',
+            });
+            setTimeout(() => { setViewMode('onboarding'); setProgress(null); }, ERROR_RESET_DELAY_MS);
+          }
+        }}
       />
     );
   }

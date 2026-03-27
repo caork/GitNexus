@@ -228,3 +228,128 @@ export const fetchClusterDetail = async (
   await assertOk(response);
   return response.json();
 };
+
+// ── Analyze API ──────────────────────────────────────────────────────────
+
+export interface AnalyzeJobProgress {
+  phase: string;
+  percent: number;
+  message: string;
+}
+
+export interface AnalyzeJobStatus {
+  id: string;
+  status: 'queued' | 'cloning' | 'analyzing' | 'loading' | 'complete' | 'failed';
+  repoUrl?: string;
+  repoPath?: string;
+  repoName?: string;
+  progress: AnalyzeJobProgress;
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
+}
+
+/**
+ * Start a server-side analysis job.
+ * Returns 202 with { jobId, status }.
+ */
+export const startAnalyze = async (
+  request: { url?: string; path?: string; force?: boolean; embeddings?: boolean },
+): Promise<{ jobId: string; status: string }> => {
+  const response = await fetchWithTimeout(
+    `${backendUrl}/api/analyze`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    },
+    30_000,
+  );
+  await assertOk(response);
+  return response.json() as Promise<{ jobId: string; status: string }>;
+};
+
+/**
+ * Poll the status of an analysis job.
+ */
+export const getAnalyzeStatus = async (
+  jobId: string,
+): Promise<AnalyzeJobStatus> => {
+  const response = await fetchWithTimeout(
+    `${backendUrl}/api/analyze/${encodeURIComponent(jobId)}`,
+  );
+  await assertOk(response);
+  return response.json() as Promise<AnalyzeJobStatus>;
+};
+
+/**
+ * Stream analysis progress via SSE using fetch + ReadableStream.
+ * Returns an AbortController to cancel the stream.
+ */
+export const streamAnalyzeProgress = (
+  jobId: string,
+  onProgress: (progress: AnalyzeJobProgress) => void,
+  onComplete: (data: { repoName?: string }) => void,
+  onError: (error: string) => void,
+): AbortController => {
+  const controller = new AbortController();
+  const url = `${backendUrl}/api/analyze/${encodeURIComponent(jobId)}/progress`;
+
+  (async () => {
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) {
+        onError(`Server returned ${response.status}`);
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        onError('No response body');
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events from buffer
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        let eventType = 'message';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            try {
+              const parsed = JSON.parse(line.slice(6));
+              if (eventType === 'complete') {
+                onComplete(parsed);
+                return;
+              } else if (eventType === 'failed') {
+                onError(parsed.error || 'Analysis failed');
+                return;
+              } else {
+                onProgress(parsed);
+              }
+            } catch {
+              // Skip malformed JSON
+            }
+            eventType = 'message';
+          }
+        }
+      }
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      onError(err instanceof Error ? err.message : 'Stream error');
+    }
+  })();
+
+  return controller;
+};

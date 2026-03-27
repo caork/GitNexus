@@ -1,13 +1,16 @@
 import { useState, useCallback, useRef, DragEvent } from 'react';
-import { Upload, FileArchive, Github, Loader2, ArrowRight, Key, Eye, EyeOff, Globe, X } from '@/lib/lucide-icons';
+import { Upload, FileArchive, Github, Loader2, ArrowRight, Key, Eye, EyeOff, Globe, X, Zap } from '@/lib/lucide-icons';
 import { cloneRepository, parseGitHubUrl } from '../services/git-clone';
 import { connectToServer, type ConnectToServerResult } from '../services/server-connection';
+import { startAnalyze, streamAnalyzeProgress, type AnalyzeJobProgress } from '../services/backend';
+import { AnalyzeProgress } from './AnalyzeProgress';
 import { FileEntry } from '../services/zip';
 
 interface DropZoneProps {
   onFileSelect: (file: File) => void;
   onGitClone?: (files: FileEntry[], repoName?: string) => void;
   onServerConnect?: (result: ConnectToServerResult, serverUrl?: string) => void;
+  onServerAnalyze?: (serverUrl: string, repoName: string) => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -16,7 +19,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZoneProps) => {
+export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onServerAnalyze }: DropZoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [activeTab, setActiveTab] = useState<'zip' | 'github' | 'server'>('zip');
   const [githubUrl, setGithubUrl] = useState('');
@@ -41,6 +44,53 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
     total: number | null;
   }>({ phase: '', downloaded: 0, total: null });
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Analyze state
+  const [analyzeUrl, setAnalyzeUrl] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzeProgress, setAnalyzeProgress] = useState<AnalyzeJobProgress>({ phase: 'queued', percent: 0, message: 'Starting...' });
+  const analyzeAbortRef = useRef<AbortController | null>(null);
+
+  const handleAnalyze = async () => {
+    if (!analyzeUrl.trim()) return;
+    setIsAnalyzing(true);
+    setError(null);
+    setAnalyzeProgress({ phase: 'queued', percent: 0, message: 'Starting...' });
+
+    try {
+      const serverBase = serverUrl.trim() || window.location.origin;
+      const { jobId } = await startAnalyze({ url: analyzeUrl.trim() });
+
+      analyzeAbortRef.current = streamAnalyzeProgress(
+        jobId,
+        (progress) => setAnalyzeProgress(progress),
+        (data) => {
+          setIsAnalyzing(false);
+          // On complete, trigger server connect to load the graph
+          if (onServerAnalyze && data.repoName) {
+            onServerAnalyze(serverBase, data.repoName);
+          } else if (onServerConnect) {
+            // Fallback: connect to server to load the newly indexed repo
+            connectToServer(serverBase, undefined, undefined, data.repoName)
+              .then((result) => onServerConnect(result, serverBase))
+              .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'));
+          }
+        },
+        (errMsg) => {
+          setIsAnalyzing(false);
+          setError(errMsg);
+        },
+      );
+    } catch (err) {
+      setIsAnalyzing(false);
+      setError(err instanceof Error ? err.message : 'Failed to start analysis');
+    }
+  };
+
+  const handleCancelAnalyze = () => {
+    analyzeAbortRef.current?.abort();
+    setIsAnalyzing(false);
+  };
 
   const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -571,6 +621,58 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
               <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
                 No WASM needed
               </span>
+            </div>
+
+            {/* Divider */}
+            <div className="mt-6 flex items-center gap-3">
+              <div className="flex-1 h-px bg-border-subtle" />
+              <span className="text-xs text-text-muted">or analyze a new repo</span>
+              <div className="flex-1 h-px bg-border-subtle" />
+            </div>
+
+            {/* Analyze section */}
+            <div className="mt-4 space-y-3">
+              {isAnalyzing ? (
+                <AnalyzeProgress progress={analyzeProgress} onCancel={handleCancelAnalyze} />
+              ) : (
+                <>
+                  <input
+                    type="url"
+                    value={analyzeUrl}
+                    onChange={(e) => setAnalyzeUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !isAnalyzing && handleAnalyze()}
+                    placeholder="https://github.com/user/repo"
+                    disabled={isConnecting}
+                    autoComplete="off"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    data-form-type="other"
+                    className="
+                      w-full px-4 py-3
+                      bg-elevated border border-border-default rounded-xl
+                      text-text-primary placeholder-text-muted
+                      focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500
+                      disabled:opacity-50 disabled:cursor-not-allowed
+                      transition-all duration-200
+                    "
+                  />
+                  <button
+                    onClick={handleAnalyze}
+                    disabled={!analyzeUrl.trim() || isConnecting}
+                    className="
+                      w-full flex items-center justify-center gap-2
+                      px-4 py-3
+                      bg-emerald-600 hover:bg-emerald-500
+                      text-white font-medium rounded-xl
+                      disabled:opacity-50 disabled:cursor-not-allowed
+                      transition-all duration-200
+                    "
+                  >
+                    <Zap className="w-5 h-5" />
+                    Analyze on Server
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
