@@ -919,21 +919,13 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
         }
       });
 
-      // Stream agent response directly (no Worker indirection)
+      // Stream agent response using the full streaming generator
+      // (handles reasoning, tool_call, tool_result, content, and done events)
       const agent = agentRef.current;
       if (!agent) throw new Error('Agent not initialized');
-      const { HumanMessage, AIMessage } = await import('@langchain/core/messages');
-      const messages = history.map((m: AgentMessage) =>
-        m.role === 'user' ? new HumanMessage(m.content) : new AIMessage(m.content)
-      );
-      const stream = await agent.stream(
-        { messages },
-        { streamMode: 'messages' },
-      );
-      for await (const [msg, _meta] of stream) {
-        if (msg.content && typeof msg.content === 'string') {
-          onChunk({ type: 'content', content: msg.content });
-        }
+      const { streamAgentResponse } = await import('../core/llm/agent');
+      for await (const chunk of streamAgentResponse(agent, history)) {
+        onChunk(chunk);
       }
       onChunk({ type: 'done' });
     } catch (error) {
