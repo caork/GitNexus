@@ -32,14 +32,9 @@ export default defineConfig({
       'mermaid': path.resolve(__dirname, 'node_modules/mermaid/dist/mermaid.esm.min.mjs'),
     },
   },
-  // Polyfill Buffer for isomorphic-git (Node.js API needed in browser)
-  define: {
-    global: 'globalThis',
-  },
   // Optimize deps - exclude lbug-wasm from pre-bundling (it has WASM files)
   optimizeDeps: {
     exclude: ['@ladybugdb/wasm-core'],
-    include: ['buffer'],
   },
   // Required for LadybugDB WASM (SharedArrayBuffer needs Cross-Origin Isolation)
   server: {
