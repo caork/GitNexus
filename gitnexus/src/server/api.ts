@@ -12,7 +12,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
-import { loadMeta, listRegisteredRepos } from '../storage/repo-manager.js';
+import { loadMeta, listRegisteredRepos, getStoragePath } from '../storage/repo-manager.js';
 import { executeQuery, executePrepared, executeWithReusedStatement, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
 import { isWriteQuery } from '../mcp/core/lbug-adapter.js';
 import { NODE_TABLES, type GraphNode, type GraphRelationship } from 'gitnexus-shared';
@@ -284,7 +284,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   // which would corrupt LadybugDB (analyze calls closeLbug + initLbug while embed has queries in flight).
   const activeRepoPaths = new Set<string>();
 
-  const acquireRepoLock = (repoPath: string, jobType: 'analysis' | 'embedding'): string | null => {
+  const acquireRepoLock = (repoPath: string): string | null => {
     if (activeRepoPaths.has(repoPath)) {
       return `Another job is already active for this repository`;
     }
@@ -754,8 +754,9 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
             throw new Error('No target path resolved');
           }
 
-          // Acquire shared repo lock to prevent concurrent embed jobs on same repo
-          const lockErr = acquireRepoLock(targetPath, 'analysis');
+          // Acquire shared repo lock (keyed on storagePath to match embed handler)
+          const analyzeLockKey = getStoragePath(targetPath);
+          const lockErr = acquireRepoLock(analyzeLockKey);
           if (lockErr) {
             jobManager.updateJob(job.id, { status: 'failed', error: lockErr });
             return;
@@ -777,15 +778,15 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
                 progress: { phase: msg.phase, percent: msg.percent, message: msg.message },
               });
             } else if (msg.type === 'complete') {
-              releaseRepoLock(targetPath!);
+              releaseRepoLock(analyzeLockKey);
               jobManager.updateJob(job.id, {
                 status: 'complete',
                 repoName: msg.result.repoName,
               });
               // Reinitialize backend so it picks up the new repo
-              backend.init().catch(() => {});
+              backend.init().catch((err) => console.error('backend.init() failed after analyze:', err));
             } else if (msg.type === 'error') {
-              releaseRepoLock(targetPath!);
+              releaseRepoLock(analyzeLockKey);
               jobManager.updateJob(job.id, {
                 status: 'failed',
                 error: msg.message,
@@ -794,7 +795,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
           });
 
           child.on('error', (err) => {
-            releaseRepoLock(targetPath!);
+            releaseRepoLock(analyzeLockKey);
             jobManager.updateJob(job.id, {
               status: 'failed',
               error: `Worker process error: ${err.message}`,
@@ -804,7 +805,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
           child.on('exit', (code) => {
             const currentJob = jobManager.getJob(job.id);
             if (currentJob && currentJob.status !== 'complete' && currentJob.status !== 'failed') {
-              releaseRepoLock(targetPath!);
+              releaseRepoLock(analyzeLockKey);
               jobManager.updateJob(job.id, {
                 status: 'failed',
                 error: `Worker exited unexpectedly (code ${code})`,
@@ -823,7 +824,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
           });
 
         } catch (err: any) {
-          if (targetPath) releaseRepoLock(targetPath);
+          if (targetPath) releaseRepoLock(getStoragePath(targetPath));
           jobManager.updateJob(job.id, {
             status: 'failed',
             error: err.message || 'Analysis failed',
@@ -894,7 +895,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
 
       // Check shared repo lock — prevent concurrent analyze + embed on same repo
       const repoLockPath = entry.storagePath;
-      const lockErr = acquireRepoLock(repoLockPath, 'embedding');
+      const lockErr = acquireRepoLock(repoLockPath);
       if (lockErr) {
         res.status(409).json({ error: lockErr });
         return;
@@ -947,14 +948,21 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
 
           clearTimeout(embedTimeout);
           releaseRepoLock(repoLockPath);
-          embedJobManager.updateJob(job.id, { status: 'complete' });
+          // Don't overwrite 'failed' if the job was cancelled while the pipeline was running
+          const current = embedJobManager.getJob(job.id);
+          if (!current || current.status !== 'failed') {
+            embedJobManager.updateJob(job.id, { status: 'complete' });
+          }
         } catch (err: any) {
           clearTimeout(embedTimeout);
           releaseRepoLock(repoLockPath);
-          embedJobManager.updateJob(job.id, {
-            status: 'failed',
-            error: err.message || 'Embedding generation failed',
-          });
+          const current = embedJobManager.getJob(job.id);
+          if (!current || current.status !== 'failed') {
+            embedJobManager.updateJob(job.id, {
+              status: 'failed',
+              error: err.message || 'Embedding generation failed',
+            });
+          }
         }
       })();
 
