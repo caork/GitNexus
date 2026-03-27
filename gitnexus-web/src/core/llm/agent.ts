@@ -12,7 +12,7 @@ import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { ChatOllama } from '@langchain/ollama';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { createGraphRAGTools } from './tools';
+import { createGraphRAGTools, type GraphRAGBackend } from './tools';
 import type {
   ProviderConfig,
   OpenAIConfig,
@@ -297,25 +297,11 @@ const extractInstanceName = (endpoint: string): string => {
  */
 export const createGraphRAGAgent = (
   config: ProviderConfig,
-  executeQuery: (cypher: string) => Promise<any[]>,
-  semanticSearch: (query: string, k?: number, maxDistance?: number) => Promise<any[]>,
-  semanticSearchWithContext: (query: string, k?: number, hops?: number) => Promise<any[]>,
-  hybridSearch: (query: string, k?: number) => Promise<any[]>,
-  isEmbeddingReady: () => boolean,
-  isBM25Ready: () => boolean,
-  fileContents: Map<string, string>,
+  backend: GraphRAGBackend,
   codebaseContext?: CodebaseContext
 ) => {
   const model = createChatModel(config);
-  const tools = createGraphRAGTools(
-    executeQuery,
-    semanticSearch,
-    semanticSearchWithContext,
-    hybridSearch,
-    isEmbeddingReady,
-    isBM25Ready,
-    fileContents
-  );
+  const tools = createGraphRAGTools(backend);
   
   // Use dynamic prompt if context is provided, otherwise use base prompt
   const systemPrompt = codebaseContext 

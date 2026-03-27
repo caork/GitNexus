@@ -13,9 +13,8 @@
 
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
-// Note: GRAPH_SCHEMA_DESCRIPTION from './types' is available if needed for additional context
-import { WebGPUNotAvailableError, embedText, embeddingToArray, initEmbedder, isEmbedderReady } from '../embeddings/embedder';
-import { NODE_TABLES, REL_TYPES } from '../lbug/schema';
+import { NODE_TABLES, REL_TYPES } from 'gitnexus-shared';
+import type { EnrichedSearchResult, GrepResult } from '../../services/backend-client';
 
 const validLabel = (label: string): boolean =>
   (NODE_TABLES as readonly string[]).includes(label);
@@ -24,17 +23,21 @@ const validRelType = (t: string): boolean =>
   (REL_TYPES as readonly string[]).includes(t);
 
 /**
- * Tool factory - creates tools bound to the LadybugDB query functions
+ * Backend query interface for Graph RAG tools.
+ * All queries go through the backend HTTP API.
  */
-export const createGraphRAGTools = (
-  executeQuery: (cypher: string) => Promise<any[]>,
-  semanticSearch: (query: string, k?: number, maxDistance?: number) => Promise<any[]>,
-  semanticSearchWithContext: (query: string, k?: number, hops?: number) => Promise<any[]>,
-  hybridSearch: (query: string, k?: number) => Promise<any[]>,
-  isEmbeddingReady: () => boolean,
-  isBM25Ready: () => boolean,
-  fileContents: Map<string, string>
-) => {
+export interface GraphRAGBackend {
+  executeQuery: (cypher: string) => Promise<Record<string, unknown>[]>;
+  search: (query: string, opts?: { limit?: number; mode?: 'hybrid' | 'semantic' | 'bm25'; enrich?: boolean }) => Promise<EnrichedSearchResult[]>;
+  grep: (pattern: string, limit?: number) => Promise<GrepResult[]>;
+  readFile: (filePath: string) => Promise<string>;
+}
+
+/**
+ * Tool factory - creates tools bound to backend HTTP query functions
+ */
+export const createGraphRAGTools = (backend: GraphRAGBackend) => {
+  const { executeQuery, search: backendSearch, grep: backendGrep, readFile } = backend;
 
   // ============================================================================
   // TOOL 1: SEARCH (Hybrid + 1-hop expansion)
@@ -48,29 +51,18 @@ export const createGraphRAGTools = (
       const k = limit ?? 10;
       const shouldGroup = groupByProcess ?? true;
       
-      // Step 1: Hybrid search (BM25 + semantic with RRF)
-      let searchResults: any[] = [];
-      
-      if (isBM25Ready()) {
-        try {
-          searchResults = await hybridSearch(query, k);
-        } catch (error) {
-          // Fallback to semantic-only if hybrid fails
-          if (isEmbeddingReady()) {
-            searchResults = await semanticSearch(query, k);
-          }
-        }
-      } else if (isEmbeddingReady()) {
-        // Semantic only if BM25 not ready
-        searchResults = await semanticSearch(query, k);
-      } else {
+      // Step 1: Enriched search via backend (connections, cluster, processes pre-joined)
+      let searchResults: EnrichedSearchResult[];
+      try {
+        searchResults = await backendSearch(query, { limit: k, enrich: true });
+      } catch {
         return 'Search is not available. Please load a repository first.';
       }
-      
+
       if (searchResults.length === 0) {
         return `No code found matching "${query}". Try different terms or use grep for exact patterns.`;
       }
-      
+
       type ProcessInfo = { id: string; label: string; step?: number; stepCount?: number };
       type ResultInfo = {
         idx: number;
@@ -85,124 +77,37 @@ export const createGraphRAGTools = (
         clusterLabel: string;
         processes: ProcessInfo[];
       };
-      
-      const results: ResultInfo[] = [];
-      
-      for (let i = 0; i < Math.min(searchResults.length, k); i++) {
-        const r = searchResults[i];
-        const nodeId = r.nodeId || r.id || '';
+
+      const results: ResultInfo[] = searchResults.slice(0, k).map((r, i) => {
+        const nodeId = r.nodeId || '';
         const name = r.name || r.filePath?.split('/').pop() || 'Unknown';
         const label = r.label || 'File';
         const filePath = r.filePath || '';
         const location = r.startLine ? ` (lines ${r.startLine}-${r.endLine})` : '';
         const sources = r.sources?.join('+') || 'hybrid';
         const score = r.score ? ` [score: ${r.score.toFixed(2)}]` : '';
-        
-        // Get 1-hop connections using single CodeRelation table
+
+        // Format connections from enriched result
         let connections = '';
-        if (nodeId) {
-          try {
-            const nodeLabel = nodeId.split(':')[0];
-            if (!validLabel(nodeLabel)) throw new Error('invalid label');
-            const connectionsQuery = `
-              MATCH (n:${nodeLabel} {id: '${nodeId.replace(/'/g, "''")}'})
-              OPTIONAL MATCH (n)-[r1:CodeRelation]->(dst)
-              OPTIONAL MATCH (src)-[r2:CodeRelation]->(n)
-              RETURN
-                collect(DISTINCT {name: dst.name, type: r1.type, confidence: r1.confidence}) AS outgoing,
-                collect(DISTINCT {name: src.name, type: r2.type, confidence: r2.confidence}) AS incoming
-              LIMIT 1
-            `;
-            const connRes = await executeQuery(connectionsQuery);
-            if (connRes.length > 0) {
-              const row = connRes[0];
-              const rawOutgoing = Array.isArray(row) ? row[0] : (row.outgoing || []);
-              const rawIncoming = Array.isArray(row) ? row[1] : (row.incoming || []);
-              const outgoing = (rawOutgoing || []).filter((c: any) => c && c.name).slice(0, 3);
-              const incoming = (rawIncoming || []).filter((c: any) => c && c.name).slice(0, 3);
-              
-              const fmt = (c: any, dir: 'out' | 'in') => {
-                const conf = c.confidence ? Math.round(c.confidence * 100) : 100;
-                return dir === 'out' 
-                  ? `-[${c.type} ${conf}%]-> ${c.name}`
-                  : `<-[${c.type} ${conf}%]- ${c.name}`;
-              };
-              
-              const outList = outgoing.map((c: any) => fmt(c, 'out'));
-              const inList = incoming.map((c: any) => fmt(c, 'in'));
-              if (outList.length || inList.length) {
-                connections = `\n    Connections: ${[...outList, ...inList].join(', ')}`;
-              }
-            }
-          } catch {
-            // Skip connections if query fails
+        if (r.connections) {
+          const outgoing = (r.connections.outgoing || []).filter(c => c?.name).slice(0, 3);
+          const incoming = (r.connections.incoming || []).filter(c => c?.name).slice(0, 3);
+          const fmt = (c: { name: string; type: string; confidence?: number }, dir: 'out' | 'in') => {
+            const conf = c.confidence ? Math.round(c.confidence * 100) : 100;
+            return dir === 'out' ? `-[${c.type} ${conf}%]-> ${c.name}` : `<-[${c.type} ${conf}%]- ${c.name}`;
+          };
+          const outList = outgoing.map(c => fmt(c, 'out'));
+          const inList = incoming.map(c => fmt(c, 'in'));
+          if (outList.length || inList.length) {
+            connections = `\n    Connections: ${[...outList, ...inList].join(', ')}`;
           }
         }
-        
-        // Cluster membership
-        let clusterLabel = 'Unclustered';
-        if (nodeId) {
-          try {
-            const nodeLabel = nodeId.split(':')[0];
-            if (!validLabel(nodeLabel)) throw new Error('invalid label');
-            const clusterQuery = `
-              MATCH (n:${nodeLabel} {id: '${nodeId.replace(/'/g, "''")}'})
-              MATCH (n)-[:CodeRelation {type: 'MEMBER_OF'}]->(c:Community)
-              RETURN c.label AS label
-              LIMIT 1
-            `;
-            const clusterRes = await executeQuery(clusterQuery);
-            if (clusterRes.length > 0) {
-              const row = clusterRes[0];
-              const labelValue = Array.isArray(row) ? row[0] : row.label;
-              if (labelValue) clusterLabel = labelValue;
-            }
-          } catch {
-            // Skip cluster lookup if query fails
-          }
-        }
-        
-        // Process participation
-        const processes: ProcessInfo[] = [];
-        if (nodeId) {
-          try {
-            const nodeLabel = nodeId.split(':')[0];
-            if (!validLabel(nodeLabel)) throw new Error('invalid label');
-            const processQuery = `
-              MATCH (n:${nodeLabel} {id: '${nodeId.replace(/'/g, "''")}'})
-              MATCH (n)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process)
-              RETURN p.id AS id, p.label AS label, r.step AS step, p.stepCount AS stepCount
-              ORDER BY r.step
-            `;
-            const procRes = await executeQuery(processQuery);
-            for (const row of procRes) {
-              const id = Array.isArray(row) ? row[0] : row.id;
-              const labelValue = Array.isArray(row) ? row[1] : row.label;
-              const step = Array.isArray(row) ? row[2] : row.step;
-              const stepCount = Array.isArray(row) ? row[3] : row.stepCount;
-              if (id && labelValue) {
-                processes.push({ id, label: labelValue, step, stepCount });
-              }
-            }
-          } catch {
-            // Skip process lookup if query fails
-          }
-        }
-        
-        results.push({
-          idx: i + 1,
-          nodeId,
-          name,
-          label,
-          filePath,
-          location,
-          sources,
-          score,
-          connections,
-          clusterLabel,
-          processes,
-        });
-      }
+
+        const clusterLabel = (r.cluster as string) || 'Unclustered';
+        const processes: ProcessInfo[] = (r.processes || []).filter(p => p.id && p.label);
+
+        return { idx: i + 1, nodeId, name, label, filePath, location, sources, score, connections, clusterLabel, processes };
+      });
       
       const formatResult = (r: ResultInfo, stepInfo?: ProcessInfo) => {
         const stepLabel = stepInfo?.step ? ` (step ${stepInfo.step}/${stepInfo.stepCount ?? '?'})` : '';
@@ -280,34 +185,27 @@ export const createGraphRAGTools = (
   const cypherTool = tool(
     async ({ query, cypher }: { query?: string; cypher: string }) => {
       try {
-        let finalCypher = cypher;
-        
-        // Auto-embed if {{QUERY_VECTOR}} placeholder is present
+        // If query contains {{QUERY_VECTOR}}, use semantic search via backend instead
         if (cypher.includes('{{QUERY_VECTOR}}')) {
           if (!query) {
             return "Error: Your Cypher contains {{QUERY_VECTOR}} but you didn't provide a 'query' to embed. Add a natural language query.";
           }
-          
-          if (!isEmbeddingReady()) {
-            // Try to init embedder
-            try {
-              await initEmbedder();
-            } catch (err) {
-              if (err instanceof WebGPUNotAvailableError) {
-                await initEmbedder(undefined, {}, 'wasm');
-              } else {
-                return 'Embeddings not available. Remove {{QUERY_VECTOR}} and use a non-vector query.';
-              }
+          // Route to backend semantic search instead of embedding locally
+          try {
+            const semanticResults = await backendSearch(query, { limit: 10, mode: 'semantic' });
+            if (semanticResults.length === 0) {
+              return 'Semantic search returned no results. Embeddings may not be generated yet.';
             }
+            const formatted = semanticResults.map((r, i) =>
+              `[${i + 1}] ${r.label || 'File'}: ${r.name || r.filePath?.split('/').pop() || '?'} (score: ${(r.score ?? 0).toFixed(3)})\n    File: ${r.filePath || 'n/a'}`
+            ).join('\n');
+            return `Semantic search for "${query}" (${semanticResults.length} results):\n\n${formatted}`;
+          } catch {
+            return 'Semantic search not available. Embeddings may not be generated. Use a non-vector Cypher query instead.';
           }
-          
-          const queryEmbedding = await embedText(query);
-          const queryVec = embeddingToArray(queryEmbedding);
-          const queryVecStr = `CAST([${queryVec.join(',')}] AS FLOAT[384])`;
-          finalCypher = cypher.replace(/\{\{\s*QUERY_VECTOR\s*\}\}/g, queryVecStr);
         }
-        
-        const results = await executeQuery(finalCypher);
+
+        const results = await executeQuery(cypher);
         
         if (results.length === 0) {
           return 'Query returned no results.';
@@ -382,51 +280,34 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
   // ============================================================================
   
   const grepTool = tool(
-    async ({ pattern, fileFilter, caseSensitive, maxResults }: { 
-      pattern: string; 
+    async ({ pattern, fileFilter, caseSensitive, maxResults }: {
+      pattern: string;
       fileFilter?: string;
       caseSensitive?: boolean;
       maxResults?: number;
     }) => {
       try {
-        const flags = caseSensitive ? 'g' : 'gi';
-        let regex: RegExp;
+        // Validate regex locally before sending to backend
         try {
-          regex = new RegExp(pattern, flags);
+          new RegExp(pattern, caseSensitive ? 'g' : 'gi');
         } catch (e) {
           return `Invalid regex: ${pattern}. Error: ${e instanceof Error ? e.message : String(e)}`;
         }
-        
-        const results: Array<{ file: string; line: number; content: string }> = [];
+
         const limit = maxResults ?? 100;
-        
-        for (const [filePath, content] of fileContents.entries()) {
-          if (fileFilter && !filePath.toLowerCase().includes(fileFilter.toLowerCase())) {
-            continue;
-          }
-          
-          const lines = content.split('\n');
-          for (let i = 0; i < lines.length; i++) {
-            if (regex.test(lines[i])) {
-              results.push({
-                file: filePath,
-                line: i + 1,
-                content: lines[i].trim().slice(0, 150),
-              });
-              if (results.length >= limit) break;
-            }
-            regex.lastIndex = 0;
-          }
-          if (results.length >= limit) break;
-        }
-        
+        const fullPattern = fileFilter
+          ? `(?=.*${fileFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}).*${pattern}`
+          : pattern;
+
+        const results = await backendGrep(fullPattern, limit);
+
         if (results.length === 0) {
           return `No matches for "${pattern}"${fileFilter ? ` in files matching "${fileFilter}"` : ''}`;
         }
-        
-        const formatted = results.map(r => `${r.file}:${r.line}: ${r.content}`).join('\n');
+
+        const formatted = results.map(r => `${r.filePath}:${r.line}: ${r.text}`).join('\n');
         const truncatedMsg = results.length >= limit ? `\n\n(Showing first ${limit} results)` : '';
-        
+
         return `Found ${results.length} matches:\n\n${formatted}${truncatedMsg}`;
       } catch (error) {
         return `Grep error: ${error instanceof Error ? error.message : String(error)}`;
@@ -450,71 +331,25 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
   
   const readTool = tool(
     async ({ filePath }: { filePath: string }) => {
-      const normalizedRequest = filePath.replace(/\\/g, '/').toLowerCase();
-      
-      // Try exact match first
-      let content = fileContents.get(filePath);
-      let actualPath = filePath;
-      
-      // Smart matching if not found
-      if (!content) {
-        const candidates: Array<{ path: string; score: number }> = [];
-        
-        for (const [path] of fileContents.entries()) {
-          const normalizedPath = path.toLowerCase();
-          
-          if (normalizedPath === normalizedRequest) {
-            candidates.push({ path, score: 1000 });
-          } else if (normalizedPath.endsWith(normalizedRequest)) {
-            candidates.push({ path, score: 100 + (200 - path.length) });
-          } else {
-            const requestSegments = normalizedRequest.split('/').filter(Boolean);
-            const pathSegments = normalizedPath.split('/');
-            let matchScore = 0;
-            let lastMatchIdx = -1;
-            
-            for (const seg of requestSegments) {
-              const idx = pathSegments.findIndex((s, i) => i > lastMatchIdx && s.includes(seg));
-              if (idx > lastMatchIdx) {
-                matchScore += 10;
-                lastMatchIdx = idx;
-              }
-            }
-            
-            if (matchScore >= requestSegments.length * 5) {
-              candidates.push({ path, score: matchScore });
-            }
-          }
+      try {
+        const content = await readFile(filePath);
+
+        // Truncate large files
+        const MAX_CONTENT = 50000;
+        if (content.length > MAX_CONTENT) {
+          const lines = content.split('\n').length;
+          return `File: ${filePath} (${lines} lines, truncated)\n\n${content.slice(0, MAX_CONTENT)}\n\n... [truncated]`;
         }
-        
-        candidates.sort((a, b) => b.score - a.score);
-        if (candidates.length > 0) {
-          actualPath = candidates[0].path;
-          content = fileContents.get(actualPath);
-        }
-      }
-      
-      if (!content) {
-        const fileName = filePath.split('/').pop()?.toLowerCase() || '';
-        const similar = Array.from(fileContents.keys())
-          .filter(p => p.toLowerCase().includes(fileName))
-          .slice(0, 5);
-        
-        if (similar.length > 0) {
-          return `File not found: "${filePath}"\n\nDid you mean:\n${similar.map(f => `  - ${f}`).join('\n')}`;
-        }
-        return `File not found: "${filePath}"`;
-      }
-      
-      // Truncate large files
-      const MAX_CONTENT = 50000;
-      if (content.length > MAX_CONTENT) {
+
         const lines = content.split('\n').length;
-        return `File: ${actualPath} (${lines} lines, truncated)\n\n${content.slice(0, MAX_CONTENT)}\n\n... [truncated]`;
+        return `File: ${filePath} (${lines} lines)\n\n${content}`;
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('not found') || message.includes('404')) {
+          return `File not found: "${filePath}". Use grep to search for the correct path.`;
+        }
+        return `Error reading file: ${message}`;
       }
-      
-      const lines = content.split('\n').length;
-      return `File: ${actualPath} (${lines} lines)\n\n${content}`;
     },
     {
       name: 'read',
@@ -1245,30 +1080,16 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
           const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           const targetFileName = (targetFilePath || target).split('/').pop() || target;
           const baseName = targetFileName.replace(/\.[^/.]+$/, '');
-          const refRegex = new RegExp(`\\b${escapeRegex(baseName)}\\b`, 'g');
-          const hints: Array<{ file: string; line: number; content: string }> = [];
-          const hintLimit = 15;
-          
-          for (const [filePath, content] of fileContents.entries()) {
-            if (filePath === targetFilePath) continue;
-            const lines = content.split('\n');
-            for (let i = 0; i < lines.length; i++) {
-              if (refRegex.test(lines[i])) {
-                hints.push({
-                  file: filePath,
-                  line: i + 1,
-                  content: lines[i].trim().slice(0, 150),
-                });
-                if (hints.length >= hintLimit) break;
-              }
-              refRegex.lastIndex = 0;
+          try {
+            const hints = await backendGrep(`\\b${escapeRegex(baseName)}\\b`, 15);
+            const filtered = hints.filter(h => h.filePath !== targetFilePath);
+
+            if (filtered.length > 0) {
+              const formatted = filtered.map(h => `${h.filePath}:${h.line}: ${h.text}`).join('\n');
+              return `No ${direction} dependencies found for "${target}" (types: ${activeRelTypes.join(', ')}), but textual references were detected (graph may be incomplete):\n\n${formatted}${multipleMatchWarning}`;
             }
-            if (hints.length >= hintLimit) break;
-          }
-          
-          if (hints.length > 0) {
-            const formatted = hints.map(h => `${h.file}:${h.line}: ${h.content}`).join('\n');
-            return `No ${direction} dependencies found for "${target}" (types: ${activeRelTypes.join(', ')}), but textual references were detected (graph may be incomplete):\n\n${formatted}${multipleMatchWarning}`;
+          } catch {
+            // Grep fallback failed — continue to default message
           }
         }
 
@@ -1390,33 +1211,21 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
       };
       
       // Helper to get code snippet for a node (call site context)
-      const getCallSiteSnippet = (n: NodeInfo): string | null => {
+      const getCallSiteSnippet = async (n: NodeInfo): Promise<string | null> => {
         if (!n.filePath || !n.startLine) return null;
-        
-        // Find the file in fileContents (try multiple path formats)
-        let content: string | undefined;
-        const normalizedPath = n.filePath.replace(/\\/g, '/');
-        
-        for (const [path, c] of fileContents.entries()) {
-          const normalizedKey = path.replace(/\\/g, '/');
-          if (normalizedKey === normalizedPath || 
-              normalizedKey.endsWith(normalizedPath) || 
-              normalizedPath.endsWith(normalizedKey)) {
-            content = c;
-            break;
-          }
+
+        try {
+          const content = await readFile(n.filePath);
+          const lines = content.split('\n');
+          const lineIdx = n.startLine - 1;
+          if (lineIdx < 0 || lineIdx >= lines.length) return null;
+
+          let snippet = lines[lineIdx].trim();
+          if (snippet.length > 80) snippet = snippet.slice(0, 77) + '...';
+          return snippet;
+        } catch {
+          return null;
         }
-        
-        if (!content) return null;
-        
-        const lines = content.split('\n');
-        const lineIdx = n.startLine - 1;
-        if (lineIdx < 0 || lineIdx >= lines.length) return null;
-        
-        // Get the line and trim it, max 80 chars
-        let snippet = lines[lineIdx].trim();
-        if (snippet.length > 80) snippet = snippet.slice(0, 77) + '...';
-        return snippet;
       };
       
       // Depth 1 - Critical (with call site snippets)
@@ -1425,14 +1234,14 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
           ? `d=1 (Directly DEPEND ON ${target}):`
           : `d=1 (${target} USES these):`;
         lines.push(header);
-        depth1.slice(0, 15).forEach(n => {
+        for (const n of depth1.slice(0, 15)) {
           lines.push(formatNode(n));
           // Add call site snippet for d=1 results
-          const snippet = getCallSiteSnippet(n);
+          const snippet = await getCallSiteSnippet(n);
           if (snippet) {
             lines.push(`    ↳ "${snippet}"`);
           }
-        });
+        }
         if (depth1.length > 15) lines.push(`  ... +${depth1.length - 15} more`);
         lines.push(``);
       }
