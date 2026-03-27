@@ -105,7 +105,7 @@ const AppContent = () => {
       await handleServerConnect(result);
       setProgress(null);
       setServerBaseUrl(baseUrl);
-      fetchRepos(baseUrl)
+      fetchRepos()
         .then((repos) => setAvailableRepos(repos))
         .catch((e) => console.warn('Failed to fetch repo list:', e));
     }).catch((err) => {
@@ -144,7 +144,7 @@ const AppContent = () => {
           if (serverUrl) {
             const baseUrl = normalizeServerUrl(serverUrl);
             setServerBaseUrl(baseUrl);
-            fetchRepos(baseUrl)
+            fetchRepos()
               .then((repos) => setAvailableRepos(repos))
               .catch((e) => console.warn('Failed to fetch repo list:', e));
           }
@@ -165,7 +165,7 @@ const AppContent = () => {
             await handleServerConnect(result);
             setProgress(null);
             setServerBaseUrl(baseUrl);
-            fetchRepos(baseUrl)
+            fetchRepos()
               .then((repos) => setAvailableRepos(repos))
               .catch((e) => console.warn('Failed to fetch repo list:', e));
           } catch (err) {

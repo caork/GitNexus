@@ -67,7 +67,6 @@ export interface CodeReferencesPanelProps {
 export const CodeReferencesPanel = ({ onFocusNode }: CodeReferencesPanelProps) => {
   const {
     graph,
-    fileContents,
     selectedNode,
     codeReferences,
     removeCodeReference,
@@ -195,36 +194,12 @@ export const CodeReferencesPanel = ({ onFocusNode }: CodeReferencesPanelProps) =
 
   const refsWithSnippets = useMemo(() => {
     return aiReferences.map((ref) => {
-      const content = fileContents.get(ref.filePath);
-      if (!content) {
-        return { ref, content: null as string | null, start: 0, end: 0, highlightStart: 0, highlightEnd: 0, totalLines: 0 };
-      }
-
-      const lines = content.split('\n');
-      const totalLines = lines.length;
-
-      const startLine = ref.startLine ?? 0;
-      const endLine = ref.endLine ?? startLine;
-
-      const contextBefore = 3;
-      const contextAfter = 20;
-      const start = Math.max(0, startLine - contextBefore);
-      const end = Math.min(totalLines - 1, endLine + contextAfter);
-
-      return {
-        ref,
-        content: lines.slice(start, end + 1).join('\n'),
-        start,
-        end,
-        highlightStart: Math.max(0, startLine - start),
-        highlightEnd: Math.max(0, endLine - start),
-        totalLines,
-      };
+      return { ref, content: null as string | null, start: 0, end: 0, highlightStart: 0, highlightEnd: 0, totalLines: 0 };
     });
-  }, [aiReferences, fileContents]);
+  }, [aiReferences]);
 
   const selectedFilePath = selectedNode?.properties?.filePath;
-  const selectedFileContent = selectedFilePath ? fileContents.get(selectedFilePath) : undefined;
+  const selectedFileContent: string | undefined = undefined;
   const selectedIsFile = selectedNode?.label === 'File' && !!selectedFilePath;
   const showSelectedViewer = !!selectedNode && !!selectedFilePath;
   const showCitations = aiReferences.length > 0;

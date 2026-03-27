@@ -1,4 +1,4 @@
-import { Brain, Loader2, Check, AlertCircle, Zap, FlaskConical } from '@/lib/lucide-icons';
+import { Brain, Loader2, Check, AlertCircle, Zap } from '@/lib/lucide-icons';
 import { useAppState } from '../hooks/useAppState';
 import { useState } from 'react';
 import { WebGPUFallbackDialog } from './WebGPUFallbackDialog';
@@ -15,10 +15,8 @@ export const EmbeddingStatus = () => {
     graph,
     viewMode,
     serverBaseUrl,
-    testArrayParams,
   } = useAppState();
 
-  const [testResult, setTestResult] = useState<string | null>(null);
   const [showFallbackDialog, setShowFallbackDialog] = useState(false);
 
   // Only show when exploring a loaded graph; hide in backend mode (no WASM DB)
@@ -26,9 +24,9 @@ export const EmbeddingStatus = () => {
 
   const nodeCount = graph.nodes.length;
 
-  const handleStartEmbeddings = async (forceDevice?: 'webgpu' | 'wasm') => {
+  const handleStartEmbeddings = async (_forceDevice?: 'webgpu' | 'wasm') => {
     try {
-      await startEmbeddings(forceDevice);
+      await startEmbeddings();
     } catch (error: any) {
       // Check if it's a WebGPU not available error
       if (error?.name === 'WebGPUNotAvailableError' || 
@@ -50,18 +48,6 @@ export const EmbeddingStatus = () => {
     // Just close - user can try again later if they want
   };
   
-  const handleTestArrayParams = async () => {
-    setTestResult('Testing...');
-    const result = await testArrayParams();
-    if (result.success) {
-      setTestResult('✅ Array params WORK!');
-      console.log('✅ Array params test passed!');
-    } else {
-      setTestResult(`❌ ${result.error}`);
-      console.error('❌ Array params test failed:', result.error);
-    }
-  };
-
   // WebGPU fallback dialog - rendered independently of state
   const fallbackDialog = (
     <WebGPUFallbackDialog
@@ -78,18 +64,6 @@ export const EmbeddingStatus = () => {
     return (
       <>
         <div className="flex items-center gap-2">
-          {/* Test button (dev only) */}
-          {import.meta.env.DEV && (
-            <button
-              onClick={handleTestArrayParams}
-              className="flex items-center gap-1 px-2 py-1.5 bg-surface border border-border-subtle rounded-lg text-xs text-text-muted hover:bg-hover hover:text-text-secondary transition-all"
-              title="Test if LadybugDB supports array params"
-            >
-              <FlaskConical className="w-3 h-3" />
-              {testResult || 'Test'}
-            </button>
-          )}
-          
           <button
             onClick={() => handleStartEmbeddings()}
             className="flex items-center gap-2 px-3 py-1.5 bg-surface border border-border-subtle rounded-lg text-sm text-text-secondary hover:bg-hover hover:text-text-primary hover:border-accent/50 transition-all group"
@@ -107,7 +81,7 @@ export const EmbeddingStatus = () => {
 
   // Loading model
   if (embeddingStatus === 'loading') {
-    const downloadPercent = embeddingProgress?.modelDownloadPercent ?? 0;
+    const downloadPercent = embeddingProgress?.percent ?? 0;
     return (
       <>
         <div className="flex items-center gap-2.5 px-3 py-1.5 bg-surface border border-accent/30 rounded-lg text-sm">
@@ -129,8 +103,8 @@ export const EmbeddingStatus = () => {
 
   // Embedding in progress
   if (embeddingStatus === 'embedding') {
-    const processed = embeddingProgress?.nodesProcessed ?? 0;
-    const total = embeddingProgress?.totalNodes ?? 0;
+    const processed = 0;
+    const total = 0;
     const percent = embeddingProgress?.percent ?? 0;
     
     return (
@@ -181,7 +155,7 @@ export const EmbeddingStatus = () => {
         <button
           onClick={() => handleStartEmbeddings()}
           className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400 hover:bg-red-500/20 transition-colors"
-          title={embeddingProgress?.error || 'Embedding failed. Click to retry.'}
+          title="Embedding failed. Click to retry."
         >
           <AlertCircle className="w-4 h-4" />
           <span className="text-xs">Failed - Retry</span>

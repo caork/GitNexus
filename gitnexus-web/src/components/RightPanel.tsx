@@ -12,7 +12,6 @@ export const RightPanel = () => {
   const {
     isRightPanelOpen,
     setRightPanelOpen,
-    fileContents,
     graph,
     addCodeReference,
     // LLM / chat state
@@ -39,27 +38,9 @@ export const RightPanel = () => {
     }
   }, [chatMessages, isChatLoading]);
 
-  const resolveFilePathForUI = useCallback((requestedPath: string): string | null => {
-    const req = requestedPath.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
-    if (!req) return null;
-
-    // Exact match first (case-insensitive)
-    for (const key of fileContents.keys()) {
-      const norm = key.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
-      if (norm === req) return key;
-    }
-
-    // Ends-with match (best for partial paths)
-    let best: { path: string; score: number } | null = null;
-    for (const key of fileContents.keys()) {
-      const norm = key.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
-      if (norm.endsWith(req)) {
-        const score = 1000 - norm.length;
-        if (!best || score > best.score) best = { path: key, score };
-      }
-    }
-    return best?.path ?? null;
-  }, [fileContents]);
+  const resolveFilePathForUI = useCallback((_requestedPath: string): string | null => {
+    return null;
+  }, []);
 
   const findFileNodeIdForUI = useCallback((filePath: string): string | undefined => {
     if (!graph) return undefined;
