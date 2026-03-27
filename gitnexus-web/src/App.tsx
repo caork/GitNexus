@@ -19,7 +19,6 @@ const AppContent = () => {
     viewMode,
     setViewMode,
     setGraph,
-    setFileContents,
     setProgress,
     setProjectName,
     progress,
@@ -38,7 +37,6 @@ const AppContent = () => {
     availableRepos,
     setAvailableRepos,
     switchRepo,
-    loadServerGraph,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);

@@ -14,7 +14,7 @@ import {
   type BackendRepo, type ConnectResult, type JobProgress,
 } from '../services/backend-client';
 import { ERROR_RESET_DELAY_MS } from '../config/ui-constants';
-import { normalizePath, resolveFilePath as resolvePathFromContents } from '../lib/path-resolution';
+import { normalizePath } from '../lib/path-resolution';
 import { FILE_REF_REGEX, NODE_REF_REGEX } from '../lib/grounding-patterns';
 import { GraphStateProvider, useGraphState } from './app-state/graph';
 
@@ -64,8 +64,6 @@ interface AppState {
   // Graph data
   graph: KnowledgeGraph | null;
   setGraph: (graph: KnowledgeGraph | null) => void;
-  fileContents: Map<string, string>;
-  setFileContents: (contents: Map<string, string>) => void;
 
   // Selection
   selectedNode: GraphNode | null;
@@ -130,21 +128,18 @@ interface AppState {
   // Worker API (shared across app)
   runQuery: (cypher: string) => Promise<any[]>;
   isDatabaseReady: () => Promise<boolean>;
-  loadServerGraph: (nodes: GraphNode[], relationships: GraphRelationship[], fileContents: Record<string, string>) => Promise<void>;
 
   // Embedding state
   embeddingStatus: EmbeddingStatus;
-  embeddingProgress: EmbeddingProgress | null;
+  embeddingProgress: { phase: string; percent: number } | null;
 
   // Embedding methods
-  startEmbeddings: (forceDevice?: 'webgpu' | 'wasm') => Promise<void>;
+  startEmbeddings: () => Promise<void>;
   startEmbeddingsWithFallback: () => void;
-  semanticSearch: (query: string, k?: number) => Promise<SemanticSearchResult[]>;
+  semanticSearch: (query: string, k?: number) => Promise<any[]>;
   semanticSearchWithContext: (query: string, k?: number, hops?: number) => Promise<any[]>;
   isEmbeddingReady: boolean;
 
-  // Debug/test methods
-  testArrayParams: () => Promise<{ success: boolean; error?: string }>;
 
   // LLM/Agent state
   llmSettings: LLMSettings;
@@ -193,8 +188,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   const {
     graph,
     setGraph,
-    fileContents,
-    setFileContents,
     selectedNode,
     setSelectedNode,
     visibleLabels,
@@ -305,7 +298,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
 
   // Embedding state
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus>('idle');
-  const [embeddingProgress, setEmbeddingProgress] = useState<EmbeddingProgress | null>(null);
+  const [embeddingProgress, setEmbeddingProgress] = useState<{ phase: string; percent: number } | null>(null);
 
   // LLM/Agent state
   const [llmSettings, setLLMSettings] = useState<LLMSettings>(loadSettings);
@@ -324,10 +317,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   const [isCodePanelOpen, setCodePanelOpen] = useState(false);
   const [codeReferenceFocus, setCodeReferenceFocus] = useState<CodeReferenceFocus | null>(null);
 
-  const resolveFilePath = useCallback((requestedPath: string): string | null => {
-    return resolvePathFromContents(fileContents, requestedPath);
-  }, [fileContents]);
-
+  // Map of normalized file path → node ID for graph-based lookups
   const fileNodeByPath = useMemo(() => {
     if (!graph) return new Map<string, string>();
     const map = new Map<string, string>();
@@ -338,6 +328,29 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     }
     return map;
   }, [graph]);
+
+  // Map of normalized path → original path for resolving partial paths
+  const filePathIndex = useMemo(() => {
+    if (!graph) return new Map<string, string>();
+    const map = new Map<string, string>();
+    for (const n of graph.nodes) {
+      if (n.label === 'File' && n.properties.filePath) {
+        map.set(normalizePath(n.properties.filePath), n.properties.filePath);
+      }
+    }
+    return map;
+  }, [graph]);
+
+  const resolveFilePath = useCallback((requestedPath: string): string | null => {
+    const normalized = normalizePath(requestedPath);
+    // Exact match
+    if (filePathIndex.has(normalized)) return filePathIndex.get(normalized)!;
+    // Suffix match (partial paths like "src/utils.ts")
+    for (const [key, value] of filePathIndex) {
+      if (key.endsWith(normalized)) return value;
+    }
+    return null;
+  }, [filePathIndex]);
 
   const findFileNodeId = useCallback((filePath: string): string | undefined => {
     return fileNodeByPath.get(normalizePath(filePath));
@@ -421,20 +434,11 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     return probeBackend();
   }, []);
 
-  const loadServerGraph = useCallback(async (
-    nodes: GraphNode[],
-    relationships: GraphRelationship[],
-    _fileContents: Record<string, string>
-  ): Promise<void> => {
-    // No-op: graph is now stored in state only for visualization.
-    // Queries go through backend HTTP. fileContents no longer needed
-    // (grep/read tools use /api/grep and /api/file).
-  }, []);
 
   // Embedding methods — now trigger server-side via /api/embed
   const embedAbortRef = useRef<AbortController | null>(null);
 
-  const startEmbeddings = useCallback(async (_forceDevice?: 'webgpu' | 'wasm'): Promise<void> => {
+  const startEmbeddings = useCallback(async (): Promise<void> => {
     const repo = repoRef.current;
     if (!repo) throw new Error('No repository loaded');
 
@@ -509,9 +513,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     return backendSearch(query, { limit: k, mode: 'semantic', enrich: true, repo: repoRef.current });
   }, []);
 
-  const testArrayParams = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
-    return { success: true };
-  }, []);
 
   // LLM methods
   const updateLLMSettings = useCallback((updates: Partial<LLMSettings>) => {
@@ -1031,7 +1032,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
       agentRef.current = null;
       setTimeout(() => { setViewMode('exploring'); setProgress(null); }, ERROR_RESET_DELAY_MS);
     }
-  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, loadServerGraph, initializeAgent, startEmbeddingsWithFallback, setHighlightedNodeIds, clearAIToolHighlights, clearAICitationHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
+  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, initializeAgent, startEmbeddingsWithFallback, setHighlightedNodeIds, clearAIToolHighlights, clearAICitationHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
 
   const removeCodeReference = useCallback((id: string) => {
     setCodeReferences(prev => {
@@ -1070,8 +1071,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     setViewMode,
     graph,
     setGraph,
-    fileContents,
-    setFileContents,
     selectedNode,
     setSelectedNode,
     isRightPanelOpen,
@@ -1117,7 +1116,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     switchRepo,
     runQuery,
     isDatabaseReady,
-    loadServerGraph,
     // Embedding state and methods
     embeddingStatus,
     embeddingProgress,
@@ -1126,8 +1124,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     semanticSearch,
     semanticSearchWithContext,
     isEmbeddingReady: embeddingStatus === 'ready',
-    // Debug
-    testArrayParams,
     // LLM/Agent state
     llmSettings,
     updateLLMSettings,

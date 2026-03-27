@@ -6,8 +6,6 @@ import { DEFAULT_VISIBLE_LABELS, DEFAULT_VISIBLE_EDGES, type EdgeType } from '..
 interface GraphStateContextValue {
   graph: KnowledgeGraph | null;
   setGraph: (graph: KnowledgeGraph | null) => void;
-  fileContents: Map<string, string>;
-  setFileContents: (contents: Map<string, string>) => void;
   selectedNode: GraphNode | null;
   setSelectedNode: (node: GraphNode | null) => void;
   visibleLabels: NodeLabel[];
@@ -24,7 +22,6 @@ const GraphStateContext = createContext<GraphStateContextValue | null>(null);
 
 export const GraphStateProvider = ({ children }: { children: ReactNode }) => {
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
-  const [fileContents, setFileContents] = useState<Map<string, string>>(new Map());
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [visibleLabels, setVisibleLabels] = useState<NodeLabel[]>(DEFAULT_VISIBLE_LABELS);
   const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<EdgeType[]>(DEFAULT_VISIBLE_EDGES);
@@ -46,8 +43,6 @@ export const GraphStateProvider = ({ children }: { children: ReactNode }) => {
   const value = useMemo<GraphStateContextValue>(() => ({
     graph,
     setGraph,
-    fileContents,
-    setFileContents,
     selectedNode,
     setSelectedNode,
     visibleLabels,
@@ -58,7 +53,7 @@ export const GraphStateProvider = ({ children }: { children: ReactNode }) => {
     setDepthFilter,
     highlightedNodeIds,
     setHighlightedNodeIds,
-  }), [graph, fileContents, selectedNode, visibleLabels, visibleEdgeTypes, depthFilter, highlightedNodeIds]);
+  }), [graph, selectedNode, visibleLabels, visibleEdgeTypes, depthFilter, highlightedNodeIds]);
 
   return (
     <GraphStateContext.Provider value={value}>
