@@ -13,7 +13,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
 import { loadMeta, listRegisteredRepos } from '../storage/repo-manager.js';
-import { executeQuery, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
+import { executeQuery, executeWithReusedStatement, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
 import { isWriteQuery } from '../mcp/core/lbug-adapter.js';
 import { NODE_TABLES, type GraphNode, type GraphRelationship } from 'gitnexus-shared';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
@@ -798,6 +798,169 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       return;
     }
     jobManager.cancelJob(req.params.jobId, 'Cancelled by user');
+    res.json({ id: job.id, status: 'failed', error: 'Cancelled by user' });
+  });
+
+  // ── Embedding endpoints ────────────────────────────────────────────
+
+  const embedJobManager = new JobManager();
+
+  // POST /api/embed — trigger server-side embedding generation
+  app.post('/api/embed', async (req, res) => {
+    try {
+      const entry = await resolveRepo(requestedRepo(req));
+      if (!entry) {
+        res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
+
+      const job = embedJobManager.createJob({ repoPath: entry.storagePath });
+      job.repoName = entry.name;
+      job.status = 'analyzing';
+
+      // Run embedding pipeline asynchronously
+      (async () => {
+        try {
+          const lbugPath = path.join(entry.storagePath, 'lbug');
+          await withLbugDb(lbugPath, async () => {
+            const { runEmbeddingPipeline } = await import('../core/embeddings/embedding-pipeline.js');
+            await runEmbeddingPipeline(
+              executeQuery,
+              executeWithReusedStatement,
+              (p) => {
+                embedJobManager.updateJob(job.id, {
+                  progress: {
+                    phase: p.phase === 'ready' ? 'complete' : p.phase === 'error' ? 'failed' : p.phase,
+                    percent: p.percent,
+                    message: p.phase === 'loading-model' ? 'Loading embedding model...'
+                      : p.phase === 'embedding' ? `Embedding nodes (${p.percent}%)...`
+                      : p.phase === 'indexing' ? 'Creating vector index...'
+                      : p.phase === 'ready' ? 'Embeddings complete'
+                      : `${p.phase} (${p.percent}%)`,
+                  },
+                });
+              },
+            );
+          });
+
+          embedJobManager.updateJob(job.id, { status: 'complete' });
+        } catch (err: any) {
+          embedJobManager.updateJob(job.id, {
+            status: 'failed',
+            error: err.message || 'Embedding generation failed',
+          });
+        }
+      })();
+
+      res.status(202).json({ jobId: job.id, status: 'analyzing' });
+    } catch (err: any) {
+      if (err.message?.includes('already in progress')) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(500).json({ error: err.message || 'Failed to start embedding generation' });
+      }
+    }
+  });
+
+  // GET /api/embed/:jobId — poll embedding job status
+  app.get('/api/embed/:jobId', (req, res) => {
+    const job = embedJobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    res.json({
+      id: job.id,
+      status: job.status,
+      repoName: job.repoName,
+      progress: job.progress,
+      error: job.error,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+    });
+  });
+
+  // GET /api/embed/:jobId/progress — SSE stream for embedding progress
+  app.get('/api/embed/:jobId/progress', (req, res) => {
+    const job = embedJobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+
+    let eventId = 0;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    // Send current state immediately
+    eventId++;
+    res.write(`id: ${eventId}\ndata: ${JSON.stringify(job.progress)}\n\n`);
+
+    // If already terminal, send event and close
+    if (job.status === 'complete' || job.status === 'failed') {
+      eventId++;
+      res.write(`id: ${eventId}\nevent: ${job.status}\ndata: ${JSON.stringify({
+        repoName: job.repoName,
+        error: job.error,
+      })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Heartbeat to detect zombie connections
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(':heartbeat\n\n');
+      } catch {
+        clearInterval(heartbeat);
+        unsubscribe();
+      }
+    }, 30_000);
+
+    // Subscribe to progress updates
+    const unsubscribe = embedJobManager.onProgress(job.id, (progress) => {
+      try {
+        eventId++;
+        if (progress.phase === 'complete' || progress.phase === 'failed') {
+          const eventJob = embedJobManager.getJob(req.params.jobId);
+          res.write(`id: ${eventId}\nevent: ${progress.phase}\ndata: ${JSON.stringify({
+            repoName: eventJob?.repoName,
+            error: eventJob?.error,
+          })}\n\n`);
+          clearInterval(heartbeat);
+          res.end();
+          unsubscribe();
+        } else {
+          res.write(`id: ${eventId}\ndata: ${JSON.stringify(progress)}\n\n`);
+        }
+      } catch {
+        clearInterval(heartbeat);
+        unsubscribe();
+      }
+    });
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
+
+  // DELETE /api/embed/:jobId — cancel embedding job
+  app.delete('/api/embed/:jobId', (req, res) => {
+    const job = embedJobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    if (job.status === 'complete' || job.status === 'failed') {
+      res.status(400).json({ error: `Job already ${job.status}` });
+      return;
+    }
+    embedJobManager.cancelJob(req.params.jobId, 'Cancelled by user');
     res.json({ id: job.id, status: 'failed', error: 'Cancelled by user' });
   });
 
