@@ -34,7 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
   
-  if (!allowedHosts.some(host => parsedUrl.hostname.endsWith(host))) {
+  if (!allowedHosts.some(host => parsedUrl.hostname === host || parsedUrl.hostname.endsWith('.' + host))) {
     res.status(403).json({ error: 'Only GitHub URLs are allowed' });
     return;
   }

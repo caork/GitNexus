@@ -14,6 +14,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { loadMeta, listRegisteredRepos } from '../storage/repo-manager.js';
 import { executeQuery, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
+import { isWriteQuery } from '../mcp/core/lbug-adapter.js';
 import { NODE_TABLES, type GraphNode, type GraphRelationship } from 'gitnexus-shared';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
 import { hybridSearch } from '../core/search/hybrid-search.js';
@@ -260,6 +261,11 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       const cypher = req.body.cypher as string;
       if (!cypher) {
         res.status(400).json({ error: 'Missing "cypher" in request body' });
+        return;
+      }
+
+      if (isWriteQuery(cypher)) {
+        res.status(403).json({ error: 'Write queries are not allowed via the HTTP API' });
         return;
       }
 
