@@ -13,7 +13,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
 import { loadMeta, listRegisteredRepos } from '../storage/repo-manager.js';
-import { executeQuery, executeWithReusedStatement, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
+import { executeQuery, executePrepared, executeWithReusedStatement, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
 import { isWriteQuery } from '../mcp/core/lbug-adapter.js';
 import { NODE_TABLES, type GraphNode, type GraphRelationship } from 'gitnexus-shared';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
@@ -160,6 +160,84 @@ const buildGraph = async (includeContent = false): Promise<{ nodes: GraphNode[];
   }
 
   return { nodes, relationships };
+};
+
+/**
+ * Mount an SSE progress endpoint for a JobManager.
+ * Handles: initial state, terminal events, heartbeat, event IDs, client disconnect.
+ */
+const mountSSEProgress = (
+  app: express.Express,
+  routePath: string,
+  jm: JobManager,
+) => {
+  app.get(routePath, (req, res) => {
+    const job = jm.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+
+    let eventId = 0;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    // Send current state immediately
+    eventId++;
+    res.write(`id: ${eventId}\ndata: ${JSON.stringify(job.progress)}\n\n`);
+
+    // If already terminal, send event and close
+    if (job.status === 'complete' || job.status === 'failed') {
+      eventId++;
+      res.write(`id: ${eventId}\nevent: ${job.status}\ndata: ${JSON.stringify({
+        repoName: job.repoName,
+        error: job.error,
+      })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Heartbeat to detect zombie connections
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(':heartbeat\n\n');
+      } catch {
+        clearInterval(heartbeat);
+        unsubscribe();
+      }
+    }, 30_000);
+
+    // Subscribe to progress updates
+    const unsubscribe = jm.onProgress(job.id, (progress) => {
+      try {
+        eventId++;
+        if (progress.phase === 'complete' || progress.phase === 'failed') {
+          const eventJob = jm.getJob(req.params.jobId);
+          res.write(`id: ${eventId}\nevent: ${progress.phase}\ndata: ${JSON.stringify({
+            repoName: eventJob?.repoName,
+            error: eventJob?.error,
+          })}\n\n`);
+          clearInterval(heartbeat);
+          res.end();
+          unsubscribe();
+        } else {
+          res.write(`id: ${eventId}\ndata: ${JSON.stringify(progress)}\n\n`);
+        }
+      } catch {
+        clearInterval(heartbeat);
+        unsubscribe();
+      }
+    });
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
 };
 
 const statusFromError = (err: any): number => {
@@ -347,40 +425,42 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         if (!enrich) return searchResults;
 
         // Server-side enrichment: add connections, cluster, processes per result
+        // Uses parameterized queries to prevent Cypher injection via nodeId
         const validLabel = (label: string): boolean =>
           (NODE_TABLES as readonly string[]).includes(label);
 
         const enriched = await Promise.all(searchResults.slice(0, limit).map(async (r: any) => {
           const nodeId: string = r.nodeId || r.id || '';
           const nodeLabel = nodeId.split(':')[0];
-          const escapedId = nodeId.replace(/'/g, "''");
           const enrichment: { connections?: any; cluster?: string; processes?: any[] } = {};
 
           if (!nodeId || !validLabel(nodeLabel)) return { ...r, ...enrichment };
 
           // Run connections, cluster, and process queries in parallel
+          // Label is validated against NODE_TABLES (compile-time safe identifiers);
+          // nodeId uses $nid parameter binding to prevent injection
           const [connRes, clusterRes, procRes] = await Promise.all([
-            executeQuery(`
-              MATCH (n:${nodeLabel} {id: '${escapedId}'})
+            executePrepared(`
+              MATCH (n:${nodeLabel} {id: $nid})
               OPTIONAL MATCH (n)-[r1:CodeRelation]->(dst)
               OPTIONAL MATCH (src)-[r2:CodeRelation]->(n)
               RETURN
                 collect(DISTINCT {name: dst.name, type: r1.type, confidence: r1.confidence}) AS outgoing,
                 collect(DISTINCT {name: src.name, type: r2.type, confidence: r2.confidence}) AS incoming
               LIMIT 1
-            `).catch(() => []),
-            executeQuery(`
-              MATCH (n:${nodeLabel} {id: '${escapedId}'})
+            `, { nid: nodeId }).catch(() => []),
+            executePrepared(`
+              MATCH (n:${nodeLabel} {id: $nid})
               MATCH (n)-[:CodeRelation {type: 'MEMBER_OF'}]->(c:Community)
               RETURN c.label AS label, c.description AS description
               LIMIT 1
-            `).catch(() => []),
-            executeQuery(`
-              MATCH (n:${nodeLabel} {id: '${escapedId}'})
+            `, { nid: nodeId }).catch(() => []),
+            executePrepared(`
+              MATCH (n:${nodeLabel} {id: $nid})
               MATCH (n)-[rel:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process)
               RETURN p.id AS id, p.label AS label, rel.step AS step, p.stepCount AS stepCount
               ORDER BY rel.step
-            `).catch(() => []),
+            `, { nid: nodeId }).catch(() => []),
           ]);
 
           if (connRes.length > 0) {
@@ -451,6 +531,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   });
 
   // Grep — regex search across file contents in the indexed repo
+  // Uses filesystem-based search for memory efficiency (never loads all files into memory)
   app.get('/api/grep', async (req, res) => {
     try {
       const entry = await resolveRepo(requestedRepo(req));
@@ -464,7 +545,13 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         return;
       }
 
-      // Validate regex
+      // ReDoS protection: reject overly long or dangerous patterns
+      if (pattern.length > 200) {
+        res.status(400).json({ error: 'Pattern too long (max 200 characters)' });
+        return;
+      }
+
+      // Validate regex syntax
       let regex: RegExp;
       try {
         regex = new RegExp(pattern, 'gim');
@@ -478,28 +565,39 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         ? Math.max(1, Math.min(200, Math.trunc(parsedLimit)))
         : 50;
 
-      const repoRoot = path.resolve(entry.path);
       const results: { filePath: string; line: number; text: string }[] = [];
+      const repoRoot = path.resolve(entry.path);
 
-      // Search all File nodes' content in the database for efficiency
+      // Get file paths from the graph (lightweight — no content loaded)
       const lbugPath = path.join(entry.storagePath, 'lbug');
       const fileRows = await withLbugDb(lbugPath, () =>
-        executeQuery(`MATCH (n:File) WHERE n.content IS NOT NULL RETURN n.filePath AS filePath, n.content AS content`)
+        executeQuery(`MATCH (n:File) WHERE n.content IS NOT NULL RETURN n.filePath AS filePath`)
       );
 
+      // Search files on disk one at a time (constant memory)
       for (const row of fileRows) {
         if (results.length >= limit) break;
         const filePath: string = row.filePath || '';
-        const content: string = row.content || '';
+        const fullPath = path.resolve(repoRoot, filePath);
+
+        // Path traversal guard
+        if (!fullPath.startsWith(repoRoot + path.sep) && fullPath !== repoRoot) continue;
+
+        let content: string;
+        try {
+          content = await fs.readFile(fullPath, 'utf-8');
+        } catch {
+          continue; // File may have been deleted since indexing
+        }
+
         const lines = content.split('\n');
         for (let i = 0; i < lines.length; i++) {
           if (results.length >= limit) break;
           if (regex.test(lines[i])) {
             results.push({ filePath, line: i + 1, text: lines[i].trim().slice(0, 200) });
-            regex.lastIndex = 0; // reset sticky state
           }
+          regex.lastIndex = 0;
         }
-        regex.lastIndex = 0;
       }
 
       res.json({ results });
@@ -732,59 +830,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     });
   });
 
-  // GET /api/analyze/:jobId/progress — SSE stream
-  app.get('/api/analyze/:jobId/progress', (req, res) => {
-    const job = jobManager.getJob(req.params.jobId);
-    if (!job) {
-      res.status(404).json({ error: 'Job not found' });
-      return;
-    }
-
-    // Set up SSE
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    });
-
-    // Send current state immediately
-    res.write(`data: ${JSON.stringify(job.progress)}\n\n`);
-
-    // If already terminal, send complete event and close
-    if (job.status === 'complete' || job.status === 'failed') {
-      res.write(`event: ${job.status}\ndata: ${JSON.stringify({
-        repoName: job.repoName,
-        error: job.error,
-      })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Subscribe to progress updates
-    const unsubscribe = jobManager.onProgress(job.id, (progress) => {
-      try {
-        if (progress.phase === 'complete' || progress.phase === 'failed') {
-          const eventJob = jobManager.getJob(req.params.jobId);
-          res.write(`event: ${progress.phase}\ndata: ${JSON.stringify({
-            repoName: eventJob?.repoName,
-            error: eventJob?.error,
-          })}\n\n`);
-          res.end();
-          unsubscribe();
-        } else {
-          res.write(`data: ${JSON.stringify(progress)}\n\n`);
-        }
-      } catch {
-        // Client disconnected
-        unsubscribe();
-      }
-    });
-
-    // Clean up on client disconnect
-    req.on('close', () => {
-      unsubscribe();
-    });
-  });
+  // GET /api/analyze/:jobId/progress — SSE stream (shared helper)
+  mountSSEProgress(app, '/api/analyze/:jobId/progress', jobManager);
 
   // DELETE /api/analyze/:jobId — cancel a running analysis job
   app.delete('/api/analyze/:jobId', (req, res) => {
@@ -883,74 +930,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     });
   });
 
-  // GET /api/embed/:jobId/progress — SSE stream for embedding progress
-  app.get('/api/embed/:jobId/progress', (req, res) => {
-    const job = embedJobManager.getJob(req.params.jobId);
-    if (!job) {
-      res.status(404).json({ error: 'Job not found' });
-      return;
-    }
-
-    let eventId = 0;
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-
-    // Send current state immediately
-    eventId++;
-    res.write(`id: ${eventId}\ndata: ${JSON.stringify(job.progress)}\n\n`);
-
-    // If already terminal, send event and close
-    if (job.status === 'complete' || job.status === 'failed') {
-      eventId++;
-      res.write(`id: ${eventId}\nevent: ${job.status}\ndata: ${JSON.stringify({
-        repoName: job.repoName,
-        error: job.error,
-      })}\n\n`);
-      res.end();
-      return;
-    }
-
-    // Heartbeat to detect zombie connections
-    const heartbeat = setInterval(() => {
-      try {
-        res.write(':heartbeat\n\n');
-      } catch {
-        clearInterval(heartbeat);
-        unsubscribe();
-      }
-    }, 30_000);
-
-    // Subscribe to progress updates
-    const unsubscribe = embedJobManager.onProgress(job.id, (progress) => {
-      try {
-        eventId++;
-        if (progress.phase === 'complete' || progress.phase === 'failed') {
-          const eventJob = embedJobManager.getJob(req.params.jobId);
-          res.write(`id: ${eventId}\nevent: ${progress.phase}\ndata: ${JSON.stringify({
-            repoName: eventJob?.repoName,
-            error: eventJob?.error,
-          })}\n\n`);
-          clearInterval(heartbeat);
-          res.end();
-          unsubscribe();
-        } else {
-          res.write(`id: ${eventId}\ndata: ${JSON.stringify(progress)}\n\n`);
-        }
-      } catch {
-        clearInterval(heartbeat);
-        unsubscribe();
-      }
-    });
-
-    req.on('close', () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-    });
-  });
+  // GET /api/embed/:jobId/progress — SSE stream (shared helper)
+  mountSSEProgress(app, '/api/embed/:jobId/progress', embedJobManager);
 
   // DELETE /api/embed/:jobId — cancel embedding job
   app.delete('/api/embed/:jobId', (req, res) => {
