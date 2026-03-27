@@ -95,13 +95,15 @@ export const isAllowedOrigin = (origin: string | undefined): boolean => {
   return false;
 };
 
-const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
+const buildGraph = async (includeContent = false): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
   const nodes: GraphNode[] = [];
   for (const table of NODE_TABLES) {
     try {
       let query = '';
       if (table === 'File') {
-        query = `MATCH (n:File) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.content AS content`;
+        query = includeContent
+          ? `MATCH (n:File) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.content AS content`
+          : `MATCH (n:File) RETURN n.id AS id, n.name AS name, n.filePath AS filePath`;
       } else if (table === 'Folder') {
         query = `MATCH (n:Folder) RETURN n.id AS id, n.name AS name, n.filePath AS filePath`;
       } else if (table === 'Community') {
@@ -109,7 +111,9 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
       } else if (table === 'Process') {
         query = `MATCH (n:Process) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.processType AS processType, n.stepCount AS stepCount, n.communities AS communities, n.entryPointId AS entryPointId, n.terminalId AS terminalId`;
       } else {
-        query = `MATCH (n:${table}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine, n.content AS content`;
+        query = includeContent
+          ? `MATCH (n:${table}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine, n.content AS content`
+          : `MATCH (n:${table}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine`;
       }
 
       const rows = await executeQuery(query);
@@ -122,7 +126,7 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
             filePath: row.filePath ?? row[2],
             startLine: row.startLine,
             endLine: row.endLine,
-            content: row.content,
+            content: includeContent ? row.content : undefined,
             heuristicLabel: row.heuristicLabel,
             cohesion: row.cohesion,
             symbolCount: row.symbolCount,
@@ -248,7 +252,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         return;
       }
       const lbugPath = path.join(entry.storagePath, 'lbug');
-      const graph = await withLbugDb(lbugPath, async () => buildGraph());
+      const includeContent = req.query.includeContent === 'true';
+      const graph = await withLbugDb(lbugPath, async () => buildGraph(includeContent));
       res.json(graph);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to build graph' });
@@ -282,7 +287,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
-  // Search
+  // Search (supports mode: 'hybrid' | 'semantic' | 'bm25', and optional enrichment)
   app.post('/api/search', async (req, res) => {
     try {
       const query = (req.body.query ?? '').trim();
@@ -301,15 +306,110 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       const limit = Number.isFinite(parsedLimit)
         ? Math.max(1, Math.min(100, Math.trunc(parsedLimit)))
         : 10;
+      const mode: string = req.body.mode ?? 'hybrid';
+      const enrich: boolean = req.body.enrich !== false; // default true
 
       const results = await withLbugDb(lbugPath, async () => {
-        const { isEmbedderReady } = await import('../core/embeddings/embedder.js');
-        if (isEmbedderReady()) {
-          const { semanticSearch } = await import('../core/embeddings/embedding-pipeline.js');
-          return hybridSearch(query, limit, executeQuery, semanticSearch);
+        let searchResults: any[];
+
+        if (mode === 'semantic') {
+          const { isEmbedderReady } = await import('../core/embeddings/embedder.js');
+          if (!isEmbedderReady()) {
+            return [] as any[];
+          }
+          const { semanticSearch: semSearch } = await import('../core/embeddings/embedding-pipeline.js');
+          searchResults = await semSearch(executeQuery, query, limit);
+          // Normalize semantic results to HybridSearchResult shape
+          searchResults = searchResults.map((r: any, i: number) => ({
+            ...r,
+            score: r.score ?? (1 - (r.distance ?? 0)),
+            rank: i + 1,
+            sources: ['semantic'],
+          }));
+        } else if (mode === 'bm25') {
+          searchResults = await searchFTSFromLbug(query, limit);
+          searchResults = searchResults.map((r: any, i: number) => ({
+            ...r,
+            rank: i + 1,
+            sources: ['bm25'],
+          }));
+        } else {
+          // hybrid (default)
+          const { isEmbedderReady } = await import('../core/embeddings/embedder.js');
+          if (isEmbedderReady()) {
+            const { semanticSearch: semSearch } = await import('../core/embeddings/embedding-pipeline.js');
+            searchResults = await hybridSearch(query, limit, executeQuery, semSearch);
+          } else {
+            searchResults = await searchFTSFromLbug(query, limit);
+          }
         }
-        // FTS-only fallback when embeddings aren't loaded
-        return searchFTSFromLbug(query, limit);
+
+        if (!enrich) return searchResults;
+
+        // Server-side enrichment: add connections, cluster, processes per result
+        const validLabel = (label: string): boolean =>
+          (NODE_TABLES as readonly string[]).includes(label);
+
+        const enriched = await Promise.all(searchResults.slice(0, limit).map(async (r: any) => {
+          const nodeId: string = r.nodeId || r.id || '';
+          const nodeLabel = nodeId.split(':')[0];
+          const escapedId = nodeId.replace(/'/g, "''");
+          const enrichment: { connections?: any; cluster?: string; processes?: any[] } = {};
+
+          if (!nodeId || !validLabel(nodeLabel)) return { ...r, ...enrichment };
+
+          // Run connections, cluster, and process queries in parallel
+          const [connRes, clusterRes, procRes] = await Promise.all([
+            executeQuery(`
+              MATCH (n:${nodeLabel} {id: '${escapedId}'})
+              OPTIONAL MATCH (n)-[r1:CodeRelation]->(dst)
+              OPTIONAL MATCH (src)-[r2:CodeRelation]->(n)
+              RETURN
+                collect(DISTINCT {name: dst.name, type: r1.type, confidence: r1.confidence}) AS outgoing,
+                collect(DISTINCT {name: src.name, type: r2.type, confidence: r2.confidence}) AS incoming
+              LIMIT 1
+            `).catch(() => []),
+            executeQuery(`
+              MATCH (n:${nodeLabel} {id: '${escapedId}'})
+              MATCH (n)-[:CodeRelation {type: 'MEMBER_OF'}]->(c:Community)
+              RETURN c.label AS label, c.description AS description
+              LIMIT 1
+            `).catch(() => []),
+            executeQuery(`
+              MATCH (n:${nodeLabel} {id: '${escapedId}'})
+              MATCH (n)-[rel:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process)
+              RETURN p.id AS id, p.label AS label, rel.step AS step, p.stepCount AS stepCount
+              ORDER BY rel.step
+            `).catch(() => []),
+          ]);
+
+          if (connRes.length > 0) {
+            const row = connRes[0];
+            const outgoing = (Array.isArray(row) ? row[0] : row.outgoing || [])
+              .filter((c: any) => c?.name).slice(0, 5);
+            const incoming = (Array.isArray(row) ? row[1] : row.incoming || [])
+              .filter((c: any) => c?.name).slice(0, 5);
+            enrichment.connections = { outgoing, incoming };
+          }
+
+          if (clusterRes.length > 0) {
+            const row = clusterRes[0];
+            enrichment.cluster = Array.isArray(row) ? row[0] : row.label;
+          }
+
+          if (procRes.length > 0) {
+            enrichment.processes = procRes.map((row: any) => ({
+              id: Array.isArray(row) ? row[0] : row.id,
+              label: Array.isArray(row) ? row[1] : row.label,
+              step: Array.isArray(row) ? row[2] : row.step,
+              stepCount: Array.isArray(row) ? row[3] : row.stepCount,
+            })).filter((p: any) => p.id && p.label);
+          }
+
+          return { ...r, ...enrichment };
+        }));
+
+        return enriched;
       });
       res.json({ results });
     } catch (err: any) {
@@ -347,6 +447,64 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       } else {
         res.status(500).json({ error: err.message || 'Failed to read file' });
       }
+    }
+  });
+
+  // Grep — regex search across file contents in the indexed repo
+  app.get('/api/grep', async (req, res) => {
+    try {
+      const entry = await resolveRepo(requestedRepo(req));
+      if (!entry) {
+        res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
+      const pattern = req.query.pattern as string;
+      if (!pattern) {
+        res.status(400).json({ error: 'Missing "pattern" query parameter' });
+        return;
+      }
+
+      // Validate regex
+      let regex: RegExp;
+      try {
+        regex = new RegExp(pattern, 'gim');
+      } catch {
+        res.status(400).json({ error: 'Invalid regex pattern' });
+        return;
+      }
+
+      const parsedLimit = Number(req.query.limit ?? 50);
+      const limit = Number.isFinite(parsedLimit)
+        ? Math.max(1, Math.min(200, Math.trunc(parsedLimit)))
+        : 50;
+
+      const repoRoot = path.resolve(entry.path);
+      const results: { filePath: string; line: number; text: string }[] = [];
+
+      // Search all File nodes' content in the database for efficiency
+      const lbugPath = path.join(entry.storagePath, 'lbug');
+      const fileRows = await withLbugDb(lbugPath, () =>
+        executeQuery(`MATCH (n:File) WHERE n.content IS NOT NULL RETURN n.filePath AS filePath, n.content AS content`)
+      );
+
+      for (const row of fileRows) {
+        if (results.length >= limit) break;
+        const filePath: string = row.filePath || '';
+        const content: string = row.content || '';
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (results.length >= limit) break;
+          if (regex.test(lines[i])) {
+            results.push({ filePath, line: i + 1, text: lines[i].trim().slice(0, 200) });
+            regex.lastIndex = 0; // reset sticky state
+          }
+        }
+        regex.lastIndex = 0;
+      }
+
+      res.json({ results });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Grep failed' });
     }
   });
 
