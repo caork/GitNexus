@@ -9,7 +9,6 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { StatusBar } from './components/StatusBar';
 import { FileTreePanel } from './components/FileTreePanel';
 import { CodeReferencesPanel } from './components/CodeReferencesPanel';
-import { FileEntry } from './services/zip';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
 import { connectToServer, fetchRepos, normalizeServerUrl, type ConnectToServerResult } from './services/server-connection';
@@ -25,8 +24,6 @@ const AppContent = () => {
     setProjectName,
     progress,
     isRightPanelOpen,
-    runPipeline,
-    runPipelineFromFiles,
     isSettingsPanelOpen,
     setSettingsPanelOpen,
     refreshLLMSettings,
@@ -45,85 +42,6 @@ const AppContent = () => {
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
-
-  const handleFileSelect = useCallback(async (file: File) => {
-    const projectName = file.name.replace('.zip', '');
-    setProjectName(projectName);
-    setProgress({ phase: 'extracting', percent: 0, message: 'Starting...', detail: 'Preparing to extract files' });
-    setViewMode('loading');
-
-    try {
-      const result = await runPipeline(file, (progress) => {
-        setProgress(progress);
-      });
-
-      setGraph(result.graph);
-      setFileContents(result.fileContents);
-      setViewMode('exploring');
-
-      // Initialize (or re-initialize) the agent AFTER a repo loads so it captures
-      // the current codebase context (file contents + graph tools) in the worker.
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-
-      // Auto-start embeddings pipeline in background
-      // Uses WebGPU if available, falls back to WASM
-      startEmbeddingsWithFallback();
-    } catch (error) {
-      console.error('Pipeline error:', error);
-      setProgress({
-        phase: 'error',
-        percent: 0,
-        message: 'Error processing file',
-        detail: error instanceof Error ? error.message : 'Unknown error',
-      });
-      setTimeout(() => {
-        setViewMode('onboarding');
-        setProgress(null);
-      }, ERROR_RESET_DELAY_MS);
-    }
-  }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipeline, startEmbeddingsWithFallback, initializeAgent]);
-
-  const handleGitClone = useCallback(async (files: FileEntry[], repoName?: string) => {
-    let projectName = repoName;
-    if (!projectName) {
-      const firstPath = files[0]?.path || 'repository';
-      projectName = firstPath.split('/')[0].replace(/-\d+$/, '') || 'repository';
-    }
-
-    setProjectName(projectName);
-    setProgress({ phase: 'extracting', percent: 0, message: 'Starting...', detail: 'Preparing to process files' });
-    setViewMode('loading');
-
-    try {
-      const result = await runPipelineFromFiles(files, (progress) => {
-        setProgress(progress);
-      });
-
-      setGraph(result.graph);
-      setFileContents(result.fileContents);
-      setViewMode('exploring');
-
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-
-      startEmbeddingsWithFallback();
-    } catch (error) {
-      console.error('Pipeline error:', error);
-      setProgress({
-        phase: 'error',
-        percent: 0,
-        message: 'Error processing repository',
-        detail: error instanceof Error ? error.message : 'Unknown error',
-      });
-      setTimeout(() => {
-        setViewMode('onboarding');
-        setProgress(null);
-      }, ERROR_RESET_DELAY_MS);
-    }
-  }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddingsWithFallback, initializeAgent]);
 
   const handleServerConnect = useCallback((result: ConnectToServerResult): Promise<void> => {
     // Extract project name from repoPath
@@ -237,8 +155,6 @@ const AppContent = () => {
   if (viewMode === 'onboarding') {
     return (
       <DropZone
-        onFileSelect={handleFileSelect}
-        onGitClone={handleGitClone}
         onServerConnect={async (result, serverUrl) => {
           await handleServerConnect(result);
           setProgress(null);

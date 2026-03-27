@@ -5,11 +5,17 @@
  * Generates semantic names, keywords, and descriptions using an LLM.
  */
 
-import { CommunityNode } from './community-processor';
-
 // ============================================================================
 // TYPES
 // ============================================================================
+
+export interface CommunityNode {
+  id: string;
+  label: string;
+  heuristicLabel: string;
+  cohesion: number;
+  symbolCount: number;
+}
 
 export interface ClusterEnrichment {
   name: string;

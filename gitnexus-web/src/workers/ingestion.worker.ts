@@ -1,7 +1,5 @@
 import * as Comlink from 'comlink';
-import { runIngestionPipeline, runPipelineFromFiles } from '../core/ingestion/pipeline';
-import { PipelineProgress, SerializablePipelineResult, serializePipelineResult } from '../types/pipeline';
-import { FileEntry } from '../services/zip';
+import { PipelineProgress } from '../types/pipeline';
 import {
   runEmbeddingPipeline,
   semanticSearch as doSemanticSearch,
@@ -13,11 +11,9 @@ import type { EmbeddingProgress, SemanticSearchResult } from '../core/embeddings
 import type { ProviderConfig, AgentStreamChunk } from '../core/llm/types';
 import { createGraphRAGAgent, streamAgentResponse, type AgentMessage, createChatModel } from '../core/llm/agent';
 import { createKnowledgeGraph } from '../core/graph/graph';
-import type { GraphNode, GraphRelationship } from '../core/graph/types';
+import type { GraphNode, GraphRelationship, KnowledgeGraph } from '../core/graph/types';
 import { SystemMessage } from '@langchain/core/messages';
-import { enrichClustersBatch, ClusterMemberInfo, ClusterEnrichment } from '../core/ingestion/cluster-enricher';
-import { CommunityNode } from '../core/ingestion/community-processor';
-import { PipelineResult } from '../types/pipeline';
+import { enrichClustersBatch, CommunityNode, ClusterMemberInfo, ClusterEnrichment } from '../core/ingestion/cluster-enricher';
 import { buildCodebaseContext, type CodebaseContext } from '../core/llm/context-builder';
 import { 
   buildBM25Index, 
@@ -41,68 +37,13 @@ const getLbugAdapter = async () => {
 let embeddingProgress: EmbeddingProgress | null = null;
 let isEmbeddingComplete = false;
 
-/**
- * Shared post-pipeline logic: store results, build BM25 index, load LadybugDB,
- * and queue enrichment config. Used by both runPipeline and runPipelineFromFiles.
- */
-const finalizePipeline = async (
-  result: PipelineResult,
-  onProgress: (progress: PipelineProgress) => void,
-  clusteringConfig?: ProviderConfig
-): Promise<SerializablePipelineResult> => {
-  currentGraphResult = result;
-
-  // Store file contents for grep/read tools (full content, not truncated)
-  storedFileContents = result.fileContents;
-
-  // Build BM25 index for keyword search (instant, ~100ms)
-  const bm25DocCount = buildBM25Index(storedFileContents);
-  if (import.meta.env.DEV) {
-    console.log(`🔍 BM25 index built: ${bm25DocCount} documents`);
-  }
-
-  // Load graph into LadybugDB for querying (optional - gracefully degrades)
-  try {
-    onProgress({
-      phase: 'complete',
-      percent: 98,
-      message: 'Loading into LadybugDB...',
-      stats: {
-        filesProcessed: result.graph.nodeCount,
-        totalFiles: result.graph.nodeCount,
-        nodesCreated: result.graph.nodeCount,
-      },
-    });
-
-    const lbug = await getLbugAdapter();
-    await lbug.loadGraphToLbug(result.graph, result.fileContents);
-
-    if (import.meta.env.DEV) {
-      const stats = await lbug.getLbugStats();
-      console.log('LadybugDB loaded:', stats);
-      console.log('📁 Stored', storedFileContents.size, 'files for grep/read tools');
-    }
-  } catch {
-    // LadybugDB is optional - silently continue without it
-  }
-
-  // Store clustering config for background enrichment (runs after graph loads)
-  if (clusteringConfig) {
-    pendingEnrichmentConfig = clusteringConfig;
-    console.log('📋 Clustering config saved for background enrichment');
-  }
-
-  // Convert to serializable format for transfer back to main thread
-  return serializePipelineResult(result);
-};
-
 // File contents state - stores full file contents for grep/read tools
 let storedFileContents: Map<string, string> = new Map();
 
 // Agent state
 let currentAgent: ReturnType<typeof createGraphRAGAgent> | null = null;
 let currentProviderConfig: ProviderConfig | null = null;
-let currentGraphResult: PipelineResult | null = null;
+let currentGraphResult: { graph: KnowledgeGraph; fileContents: Map<string, string> } | null = null;
 
 // Pending enrichment config (for background processing)
 let pendingEnrichmentConfig: ProviderConfig | null = null;
@@ -204,22 +145,6 @@ const createHttpHybridSearch = (backendUrl: string, repo: string) => {
  */
 const workerApi = {
   /**
-   * Run the ingestion pipeline in the worker thread
-   * @param file - The ZIP file to process
-   * @param onProgress - Proxied callback for progress updates (runs on main thread)
-   * @returns Serializable result (nodes, relationships, fileContents as object)
-   */
-  async runPipeline(
-    file: File,
-    onProgress: (progress: PipelineProgress) => void,
-    clusteringConfig?: ProviderConfig
-  ): Promise<SerializablePipelineResult> {
-    console.log('🔧 runPipeline called with clusteringConfig:', !!clusteringConfig);
-    const result = await runIngestionPipeline(file, onProgress);
-    return finalizePipeline(result, onProgress, clusteringConfig);
-  },
-
-  /**
    * Load a pre-built graph from the server into LadybugDB.
    * Called when connecting via server (bypasses the WASM ingestion pipeline).
    */
@@ -302,29 +227,6 @@ const workerApi = {
     } catch {
       return { nodes: 0, edges: 0 };
     }
-  },
-
-  /**
-   * Run the ingestion pipeline from pre-extracted files (e.g., from git clone)
-   * @param files - Array of file entries with path and content
-   * @param onProgress - Proxied callback for progress updates
-   * @returns Serializable result
-   */
-  async runPipelineFromFiles(
-    files: FileEntry[],
-    onProgress: (progress: PipelineProgress) => void,
-    clusteringConfig?: ProviderConfig
-  ): Promise<SerializablePipelineResult> {
-    // Skip extraction phase, start from 15%
-    onProgress({
-      phase: 'extracting',
-      percent: 15,
-      message: 'Files ready',
-      stats: { filesProcessed: 0, totalFiles: files.length, nodesCreated: 0 },
-    });
-
-    const result = await runPipelineFromFiles(files, onProgress);
-    return finalizePipeline(result, onProgress, clusteringConfig);
   },
 
   // ============================================================

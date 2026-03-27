@@ -1,10 +1,9 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react';
 import * as Comlink from 'comlink';
 import { KnowledgeGraph, GraphNode, GraphRelationship, NodeLabel } from '../core/graph/types';
-import { PipelineProgress, PipelineResult, deserializePipelineResult } from '../types/pipeline';
+import { PipelineProgress } from '../types/pipeline';
 import { createKnowledgeGraph } from '../core/graph/graph';
 import type { IngestionWorkerApi } from '../workers/ingestion.worker';
-import type { FileEntry } from '../services/zip';
 import type { EmbeddingProgress, SemanticSearchResult } from '../core/embeddings/types';
 import type { LLMSettings, ProviderConfig, AgentStreamChunk, ChatMessage, ToolCallInfo, MessageStep } from '../core/llm/types';
 import { loadSettings, getActiveProviderConfig, saveSettings } from '../core/llm/settings-service';
@@ -127,8 +126,6 @@ interface AppState {
   switchRepo: (repoName: string) => Promise<void>;
 
   // Worker API (shared across app)
-  runPipeline: (file: File, onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
-  runPipelineFromFiles: (files: FileEntry[], onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
   runQuery: (cypher: string) => Promise<any[]>;
   isDatabaseReady: () => Promise<boolean>;
   loadServerGraph: (nodes: GraphNode[], relationships: GraphRelationship[], fileContents: Record<string, string>) => Promise<void>;
@@ -429,32 +426,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
       workerRef.current = null;
       apiRef.current = null;
     };
-  }, []);
-
-  const runPipeline = useCallback(async (
-    file: File,
-    onProgress: (progress: PipelineProgress) => void,
-    clusteringConfig?: ProviderConfig
-  ): Promise<PipelineResult> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
-
-    const proxiedOnProgress = Comlink.proxy(onProgress);
-    const serializedResult = await api.runPipeline(file, proxiedOnProgress, clusteringConfig);
-    return deserializePipelineResult(serializedResult, createKnowledgeGraph);
-  }, []);
-
-  const runPipelineFromFiles = useCallback(async (
-    files: FileEntry[],
-    onProgress: (progress: PipelineProgress) => void,
-    clusteringConfig?: ProviderConfig
-  ): Promise<PipelineResult> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
-
-    const proxiedOnProgress = Comlink.proxy(onProgress);
-    const serializedResult = await api.runPipelineFromFiles(files, proxiedOnProgress, clusteringConfig);
-    return deserializePipelineResult(serializedResult, createKnowledgeGraph);
   }, []);
 
   const runQuery = useCallback(async (cypher: string): Promise<any[]> => {
@@ -1160,8 +1131,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     availableRepos,
     setAvailableRepos,
     switchRepo,
-    runPipeline,
-    runPipelineFromFiles,
     runQuery,
     isDatabaseReady,
     loadServerGraph,
