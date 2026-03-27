@@ -288,7 +288,7 @@ const findEntryPoints = (
     // Calculate entry point score using new scoring system
     const { score: baseScore, reasons } = calculateEntryPointScore(
       node.properties.name,
-      node.properties.language ?? SupportedLanguages.JavaScript,
+      (node.properties.language ?? SupportedLanguages.JavaScript) as SupportedLanguages,
       node.properties.isExported ?? false,
       callers.length,
       callees.length,

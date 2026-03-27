@@ -295,7 +295,7 @@ export function computeMRO(graph: KnowledgeGraph): MROResult {
     const classNode = graph.getNode(classId);
     if (!classNode) continue;
 
-    const language = classNode.properties.language;
+    const language = classNode.properties.language as SupportedLanguages | undefined;
     if (!language) continue;
     const className = classNode.properties.name;
 

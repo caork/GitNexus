@@ -1,21 +1,9 @@
-import { GraphNode, GraphRelationship, KnowledgeGraph } from '../core/graph/types';
+import type { GraphNode, GraphRelationship } from 'gitnexus-shared';
 
-export type PipelinePhase = 'idle' | 'extracting' | 'structure' | 'parsing' | 'imports' | 'calls' | 'heritage' | 'communities' | 'processes' | 'enriching' | 'complete' | 'error';
+// Re-export shared pipeline types
+export type { PipelinePhase, PipelineProgress } from 'gitnexus-shared';
 
-export interface PipelineProgress {
-  phase: PipelinePhase;
-  percent: number;
-  message: string;
-  detail?: string;
-  stats?: {
-    filesProcessed: number;
-    totalFiles: number;
-    nodesCreated: number;
-  };
-}
-
-// Serializable version for Web Worker communication
-// Maps and functions cannot be transferred via postMessage
+// Web-specific: serializable format for Web Worker communication
 export interface SerializablePipelineResult {
   nodes: GraphNode[];
   relationships: GraphRelationship[];

@@ -1,37 +1,10 @@
 /**
- * LadybugDB Schema Definitions — synced from gitnexus CLI (source of truth).
- *
- * Hybrid Schema:
- * - Separate node tables for each code element type (File, Function, Class, etc.)
- * - Single CodeRelation table with 'type' property for all relationships
+ * LadybugDB Schema — constants from gitnexus-shared, DDL defined here.
  */
 
-// ============================================================================
-// NODE TABLE NAMES
-// ============================================================================
-export const NODE_TABLES = [
-  'File', 'Folder', 'Function', 'Class', 'Interface', 'Method', 'CodeElement', 'Community', 'Process', 'Section',
-  // Multi-language support
-  'Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
-  'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
-  'Route',
-  'Tool'
-] as const;
-export type NodeTableName = typeof NODE_TABLES[number];
-
-// ============================================================================
-// RELATION TABLE
-// ============================================================================
-export const REL_TABLE_NAME = 'CodeRelation';
-
-// Note: WRAPS is reserved for future middleware graph traversal (not yet emitted)
-export const REL_TYPES = ['CONTAINS', 'DEFINES', 'IMPORTS', 'CALLS', 'EXTENDS', 'IMPLEMENTS', 'HAS_METHOD', 'HAS_PROPERTY', 'ACCESSES', 'OVERRIDES', 'MEMBER_OF', 'STEP_IN_PROCESS', 'HANDLES_ROUTE', 'FETCHES', 'HANDLES_TOOL', 'ENTRY_POINT_OF', 'WRAPS', 'QUERIES'] as const;
-export type RelType = typeof REL_TYPES[number];
-
-// ============================================================================
-// EMBEDDING TABLE
-// ============================================================================
-export const EMBEDDING_TABLE_NAME = 'CodeEmbedding';
+// Re-export constants from shared package (single source of truth)
+export { NODE_TABLES, REL_TABLE_NAME, REL_TYPES, EMBEDDING_TABLE_NAME } from 'gitnexus-shared';
+export type { NodeTableName, RelType } from 'gitnexus-shared';
 
 // ============================================================================
 // NODE TABLE SCHEMAS
