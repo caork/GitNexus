@@ -1,3 +1,8 @@
+/**
+ * Graph types — synced from gitnexus CLI (source of truth).
+ * Web uses string for language instead of SupportedLanguages enum.
+ */
+
 export type NodeLabel =
   | 'Project'
   | 'Package'
@@ -16,24 +21,26 @@ export type NodeLabel =
   | 'CodeElement'
   | 'Community'
   | 'Process'
-  | 'Section'
+  // Multi-language node types
   | 'Struct'
+  | 'Macro'
+  | 'Typedef'
+  | 'Union'
+  | 'Namespace'
   | 'Trait'
   | 'Impl'
   | 'TypeAlias'
   | 'Const'
   | 'Static'
-  | 'Namespace'
-  | 'Union'
-  | 'Typedef'
-  | 'Macro'
   | 'Property'
   | 'Record'
   | 'Delegate'
   | 'Annotation'
   | 'Constructor'
-  | 'Template';
-
+  | 'Template'
+  | 'Section'
+  | 'Route'        // API route endpoint
+  | 'Tool';        // MCP tool definition
 
 export type NodeProperties = {
   name: string,
@@ -42,6 +49,8 @@ export type NodeProperties = {
   endLine?: number,
   language?: string,
   isExported?: boolean,
+  astFrameworkMultiplier?: number,
+  astFrameworkReason?: string,
   // Community-specific properties
   heuristicLabel?: string,
   cohesion?: number,
@@ -55,16 +64,27 @@ export type NodeProperties = {
   communities?: string[],
   entryPointId?: string,
   terminalId?: string,
-  // Entry point scoring (computed by process detection)
   entryPointScore?: number,
   entryPointReason?: string,
+  parameterCount?: number,
+  level?: number,
+  returnType?: string,
+  declaredType?: string,
+  visibility?: string,
+  isStatic?: boolean,
+  isReadonly?: boolean,
+  responseKeys?: string[],
+  errorKeys?: string[],
+  middleware?: string[],
+  // Allow additional server-provided properties (content, etc.)
+  [key: string]: any,
 }
 
-export type RelationshipType = 
-  | 'CONTAINS' 
-  | 'CALLS' 
-  | 'INHERITS' 
-  | 'OVERRIDES' 
+export type RelationshipType =
+  | 'CONTAINS'
+  | 'CALLS'
+  | 'INHERITS'
+  | 'OVERRIDES'
   | 'IMPORTS'
   | 'USES'
   | 'DEFINES'
@@ -76,11 +96,17 @@ export type RelationshipType =
   | 'ACCESSES'
   | 'MEMBER_OF'
   | 'STEP_IN_PROCESS'
+  | 'HANDLES_ROUTE'
+  | 'FETCHES'
+  | 'HANDLES_TOOL'
+  | 'ENTRY_POINT_OF'
+  | 'WRAPS'
+  | 'QUERIES'
 
 export interface GraphNode {
   id:  string,
   label: NodeLabel,
-  properties: NodeProperties,  
+  properties: NodeProperties,
 }
 
 export interface GraphRelationship {
@@ -88,11 +114,8 @@ export interface GraphRelationship {
   sourceId: string,
   targetId: string,
   type: RelationshipType,
-  /** Confidence score 0-1 (1.0 = certain, lower = uncertain resolution) */
   confidence: number,
-  /** Resolution reason: 'import-resolved', 'same-file', 'fuzzy-global', or empty for non-CALLS */
   reason: string,
-  /** Step number for STEP_IN_PROCESS relationships (1-indexed) */
   step?: number,
 }
 

@@ -1,22 +1,21 @@
 /**
- * LadybugDB Schema Definitions
- * 
+ * LadybugDB Schema Definitions — synced from gitnexus CLI (source of truth).
+ *
  * Hybrid Schema:
  * - Separate node tables for each code element type (File, Function, Class, etc.)
  * - Single CodeRelation table with 'type' property for all relationships
- * 
- * This allows LLMs to write natural Cypher queries like:
- *   MATCH (f:Function)-[r:CodeRelation {type: 'CALLS'}]->(g:Function) RETURN f, g
  */
 
 // ============================================================================
 // NODE TABLE NAMES
 // ============================================================================
 export const NODE_TABLES = [
-  'File', 'Folder', 'Function', 'Class', 'Interface', 'Method', 'CodeElement', 'Community', 'Process',
+  'File', 'Folder', 'Function', 'Class', 'Interface', 'Method', 'CodeElement', 'Community', 'Process', 'Section',
   // Multi-language support
   'Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
-  'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module'
+  'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
+  'Route',
+  'Tool'
 ] as const;
 export type NodeTableName = typeof NODE_TABLES[number];
 
@@ -25,8 +24,8 @@ export type NodeTableName = typeof NODE_TABLES[number];
 // ============================================================================
 export const REL_TABLE_NAME = 'CodeRelation';
 
-// Valid relation types
-export const REL_TYPES = ['CONTAINS', 'DEFINES', 'IMPORTS', 'CALLS', 'EXTENDS', 'IMPLEMENTS', 'MEMBER_OF', 'STEP_IN_PROCESS', 'HAS_METHOD', 'HAS_PROPERTY', 'OVERRIDES', 'ACCESSES', 'INHERITS', 'USES', 'DECORATES'] as const;
+// Note: WRAPS is reserved for future middleware graph traversal (not yet emitted)
+export const REL_TYPES = ['CONTAINS', 'DEFINES', 'IMPORTS', 'CALLS', 'EXTENDS', 'IMPLEMENTS', 'HAS_METHOD', 'HAS_PROPERTY', 'ACCESSES', 'OVERRIDES', 'MEMBER_OF', 'STEP_IN_PROCESS', 'HANDLES_ROUTE', 'FETCHES', 'HANDLES_TOOL', 'ENTRY_POINT_OF', 'WRAPS', 'QUERIES'] as const;
 export type RelType = typeof REL_TYPES[number];
 
 // ============================================================================
@@ -64,6 +63,7 @@ CREATE NODE TABLE Function (
   endLine INT64,
   isExported BOOLEAN,
   content STRING,
+  description STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -76,6 +76,7 @@ CREATE NODE TABLE Class (
   endLine INT64,
   isExported BOOLEAN,
   content STRING,
+  description STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -88,6 +89,7 @@ CREATE NODE TABLE Interface (
   endLine INT64,
   isExported BOOLEAN,
   content STRING,
+  description STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -100,6 +102,9 @@ CREATE NODE TABLE Method (
   endLine INT64,
   isExported BOOLEAN,
   content STRING,
+  description STRING,
+  parameterCount INT32,
+  returnType STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -112,12 +117,9 @@ CREATE NODE TABLE CodeElement (
   endLine INT64,
   isExported BOOLEAN,
   content STRING,
+  description STRING,
   PRIMARY KEY (id)
 )`;
-
-// ============================================================================
-// COMMUNITY NODE TABLE (for Leiden algorithm clusters)
-// ============================================================================
 
 export const COMMUNITY_SCHEMA = `
 CREATE NODE TABLE Community (
@@ -131,10 +133,6 @@ CREATE NODE TABLE Community (
   symbolCount INT32,
   PRIMARY KEY (id)
 )`;
-
-// ============================================================================
-// PROCESS NODE TABLE (for execution flow detection)
-// ============================================================================
 
 export const PROCESS_SCHEMA = `
 CREATE NODE TABLE Process (
@@ -153,7 +151,6 @@ CREATE NODE TABLE Process (
 // MULTI-LANGUAGE NODE TABLE SCHEMAS
 // ============================================================================
 
-// Generic code element with startLine/endLine for C, C++, Rust, Go, Java, C#
 const CODE_ELEMENT_BASE = (name: string) => `
 CREATE NODE TABLE \`${name}\` (
   id STRING,
@@ -162,6 +159,7 @@ CREATE NODE TABLE \`${name}\` (
   startLine INT64,
   endLine INT64,
   content STRING,
+  description STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -184,9 +182,41 @@ export const CONSTRUCTOR_SCHEMA = CODE_ELEMENT_BASE('Constructor');
 export const TEMPLATE_SCHEMA = CODE_ELEMENT_BASE('Template');
 export const MODULE_SCHEMA = CODE_ELEMENT_BASE('Module');
 
+export const ROUTE_SCHEMA = `
+CREATE NODE TABLE Route (
+  id STRING,
+  name STRING,
+  filePath STRING,
+  responseKeys STRING[],
+  errorKeys STRING[],
+  middleware STRING[],
+  PRIMARY KEY (id)
+)`;
+
+export const TOOL_SCHEMA = `
+CREATE NODE TABLE Tool (
+  id STRING,
+  name STRING,
+  filePath STRING,
+  description STRING,
+  PRIMARY KEY (id)
+)`;
+
+export const SECTION_SCHEMA = `
+CREATE NODE TABLE Section (
+  id STRING,
+  name STRING,
+  filePath STRING,
+  startLine INT64,
+  endLine INT64,
+  level INT64,
+  content STRING,
+  description STRING,
+  PRIMARY KEY (id)
+)`;
+
 // ============================================================================
-// RELATION TABLE SCHEMA
-// Single table with 'type' property - connects all node tables
+// RELATION TABLE SCHEMA — synced from CLI
 // ============================================================================
 
 export const RELATION_SCHEMA = `
@@ -216,6 +246,7 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM File TO \`Constructor\`,
   FROM File TO \`Template\`,
   FROM File TO \`Module\`,
+  FROM File TO Section,
   FROM Folder TO Folder,
   FROM Folder TO File,
   FROM Function TO Function,
@@ -232,6 +263,11 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM Function TO \`Impl\`,
   FROM Function TO Interface,
   FROM Function TO \`Constructor\`,
+  FROM Function TO \`Const\`,
+  FROM Function TO \`Typedef\`,
+  FROM Function TO \`Union\`,
+  FROM Function TO \`Property\`,
+  FROM Function TO CodeElement,
   FROM Class TO Method,
   FROM Class TO Function,
   FROM Class TO Class,
@@ -241,7 +277,15 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM Class TO \`TypeAlias\`,
   FROM Class TO \`Struct\`,
   FROM Class TO \`Enum\`,
+  FROM Class TO \`Annotation\`,
   FROM Class TO \`Constructor\`,
+  FROM Class TO \`Trait\`,
+  FROM Class TO \`Macro\`,
+  FROM Class TO \`Impl\`,
+  FROM Class TO \`Union\`,
+  FROM Class TO \`Namespace\`,
+  FROM Class TO \`Typedef\`,
+  FROM Class TO \`Property\`,
   FROM Method TO Function,
   FROM Method TO Method,
   FROM Method TO Class,
@@ -256,6 +300,8 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM Method TO \`Impl\`,
   FROM Method TO Interface,
   FROM Method TO \`Constructor\`,
+  FROM Method TO \`Property\`,
+  FROM Method TO CodeElement,
   FROM \`Template\` TO \`Template\`,
   FROM \`Template\` TO Function,
   FROM \`Template\` TO Method,
@@ -267,6 +313,14 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Template\` TO Interface,
   FROM \`Template\` TO \`Constructor\`,
   FROM \`Module\` TO \`Module\`,
+  FROM Section TO Section,
+  FROM Section TO File,
+  FROM File TO Route,
+  FROM Function TO Route,
+  FROM Method TO Route,
+  FROM File TO Tool,
+  FROM Function TO Tool,
+  FROM Method TO Tool,
   FROM CodeElement TO Community,
   FROM Interface TO Community,
   FROM Interface TO Function,
@@ -276,11 +330,21 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM Interface TO \`TypeAlias\`,
   FROM Interface TO \`Struct\`,
   FROM Interface TO \`Constructor\`,
+  FROM Interface TO \`Property\`,
   FROM \`Struct\` TO Community,
   FROM \`Struct\` TO \`Trait\`,
+  FROM \`Struct\` TO \`Struct\`,
+  FROM \`Struct\` TO Class,
+  FROM \`Struct\` TO \`Enum\`,
   FROM \`Struct\` TO Function,
   FROM \`Struct\` TO Method,
+  FROM \`Struct\` TO Interface,
+  FROM \`Struct\` TO \`Constructor\`,
+  FROM \`Struct\` TO \`Property\`,
+  FROM \`Enum\` TO \`Enum\`,
   FROM \`Enum\` TO Community,
+  FROM \`Enum\` TO Class,
+  FROM \`Enum\` TO Interface,
   FROM \`Macro\` TO Community,
   FROM \`Macro\` TO Function,
   FROM \`Macro\` TO Method,
@@ -289,13 +353,27 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Typedef\` TO Community,
   FROM \`Union\` TO Community,
   FROM \`Namespace\` TO Community,
+  FROM \`Namespace\` TO \`Struct\`,
+  FROM \`Trait\` TO Method,
+  FROM \`Trait\` TO \`Constructor\`,
+  FROM \`Trait\` TO \`Property\`,
   FROM \`Trait\` TO Community,
+  FROM \`Impl\` TO Method,
+  FROM \`Impl\` TO \`Constructor\`,
+  FROM \`Impl\` TO \`Property\`,
   FROM \`Impl\` TO Community,
   FROM \`Impl\` TO \`Trait\`,
+  FROM \`Impl\` TO \`Struct\`,
+  FROM \`Impl\` TO \`Impl\`,
   FROM \`TypeAlias\` TO Community,
+  FROM \`TypeAlias\` TO \`Trait\`,
+  FROM \`TypeAlias\` TO Class,
   FROM \`Const\` TO Community,
   FROM \`Static\` TO Community,
   FROM \`Property\` TO Community,
+  FROM \`Record\` TO Method,
+  FROM \`Record\` TO \`Constructor\`,
+  FROM \`Record\` TO \`Property\`,
   FROM \`Record\` TO Community,
   FROM \`Delegate\` TO Community,
   FROM \`Annotation\` TO Community,
@@ -310,8 +388,12 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Constructor\` TO \`Template\`,
   FROM \`Constructor\` TO \`TypeAlias\`,
   FROM \`Constructor\` TO \`Enum\`,
+  FROM \`Constructor\` TO \`Annotation\`,
   FROM \`Constructor\` TO \`Impl\`,
   FROM \`Constructor\` TO \`Namespace\`,
+  FROM \`Constructor\` TO \`Module\`,
+  FROM \`Constructor\` TO \`Property\`,
+  FROM \`Constructor\` TO \`Typedef\`,
   FROM \`Template\` TO Community,
   FROM \`Module\` TO Community,
   FROM Function TO Process,
@@ -337,6 +419,8 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Annotation\` TO Process,
   FROM \`Template\` TO Process,
   FROM CodeElement TO Process,
+  FROM Route TO Process,
+  FROM Tool TO Process,
   type STRING,
   confidence DOUBLE,
   reason STRING,
@@ -345,27 +429,24 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
 
 // ============================================================================
 // EMBEDDING TABLE SCHEMA
-// Separate table for vector storage to avoid copy-on-write overhead
 // ============================================================================
+
+/** Browser embeddings use fixed 384 dimensions (snowflake-arctic-embed-xs). */
+export const EMBEDDING_DIMS = 384;
 
 export const EMBEDDING_SCHEMA = `
 CREATE NODE TABLE ${EMBEDDING_TABLE_NAME} (
   nodeId STRING,
-  embedding FLOAT[384],
+  embedding FLOAT[${EMBEDDING_DIMS}],
   PRIMARY KEY (nodeId)
 )`;
 
-/**
- * Create vector index for semantic search
- * Uses HNSW (Hierarchical Navigable Small World) algorithm with cosine similarity
- */
 export const CREATE_VECTOR_INDEX_QUERY = `
 CALL CREATE_VECTOR_INDEX('${EMBEDDING_TABLE_NAME}', 'code_embedding_idx', 'embedding', metric := 'cosine')
 `;
 
 // ============================================================================
 // ALL SCHEMA QUERIES IN ORDER
-// Node tables must be created before relationship tables that reference them
 // ============================================================================
 
 export const NODE_SCHEMA_QUERIES = [
@@ -397,6 +478,12 @@ export const NODE_SCHEMA_QUERIES = [
   CONSTRUCTOR_SCHEMA,
   TEMPLATE_SCHEMA,
   MODULE_SCHEMA,
+  // Markdown support
+  SECTION_SCHEMA,
+  // API routes
+  ROUTE_SCHEMA,
+  // MCP tools
+  TOOL_SCHEMA,
 ];
 
 export const REL_SCHEMA_QUERIES = [
