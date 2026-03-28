@@ -320,12 +320,25 @@ export const listRegisteredRepos = async (opts?: { validate?: boolean }): Promis
 
 export type LLMProvider = 'openai' | 'cursor';
 
+export interface EmbeddingConfig {
+  /** OpenAI-compatible embedding endpoint base URL (e.g., https://api.openai.com/v1) */
+  url?: string;
+  /** Model name sent in the request body (e.g., text-embedding-3-small) */
+  model?: string;
+  /** Bearer token for Authorization header */
+  apiKey?: string;
+  /** Expected output dimensions (must match model output) */
+  dimensions?: number;
+}
+
 export interface CLIConfig {
   apiKey?: string;
   model?: string;
   baseUrl?: string;
   provider?: LLMProvider;
   cursorModel?: string;
+  /** External embedding API configuration */
+  embedding?: EmbeddingConfig;
 }
 
 /**

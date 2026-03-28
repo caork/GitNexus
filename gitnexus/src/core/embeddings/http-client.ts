@@ -3,7 +3,14 @@
  *
  * Shared fetch+retry logic for OpenAI-compatible /v1/embeddings endpoints.
  * Imported by both the core embedder (batch) and MCP embedder (query).
+ *
+ * Configuration priority (highest wins):
+ *   1. Environment variables: GITNEXUS_EMBEDDING_URL, GITNEXUS_EMBEDDING_MODEL, etc.
+ *   2. Persistent config: ~/.gitnexus/config.json → embedding section
+ *   3. Programmatic override: setEmbeddingConfig()
  */
+
+import { loadCLIConfig, type EmbeddingConfig as StoredEmbeddingConfig } from '../../storage/repo-manager.js';
 
 const HTTP_TIMEOUT_MS = 30_000;
 const HTTP_MAX_RETRIES = 2;
@@ -18,46 +25,148 @@ interface HttpConfig {
   dimensions?: number;
 }
 
+/** In-memory override — set by setEmbeddingConfig() or API endpoint */
+let _configOverride: StoredEmbeddingConfig | null = null;
+
 /**
- * Build config from the current process.env snapshot.
- * Returns null when GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL are unset.
- * Not cached — env vars are read fresh so late configuration takes effect.
+ * Programmatically set embedding config (e.g., from an API call).
+ * Takes effect immediately for all subsequent embed calls.
+ * Pass null to clear the override and fall back to env/config.json.
  */
-const readConfig = (): HttpConfig | null => {
-  const baseUrl = process.env.GITNEXUS_EMBEDDING_URL;
-  const model = process.env.GITNEXUS_EMBEDDING_MODEL;
-  if (!baseUrl || !model) return null;
+export const setEmbeddingConfig = (config: StoredEmbeddingConfig | null): void => {
+  _configOverride = config;
+};
 
-  const rawDims = process.env.GITNEXUS_EMBEDDING_DIMS;
-  let dimensions: number | undefined;
-  if (rawDims !== undefined) {
-    const parsed = parseInt(rawDims, 10);
-    if (Number.isNaN(parsed) || parsed <= 0) {
-      throw new Error(
-        `GITNEXUS_EMBEDDING_DIMS must be a positive integer, got "${rawDims}"`,
-      );
-    }
-    dimensions = parsed;
-  }
-
+/**
+ * Get the currently active embedding config (for display/API responses).
+ */
+export const getActiveEmbeddingConfig = async (): Promise<StoredEmbeddingConfig | null> => {
+  const resolved = await readConfig();
+  if (!resolved) return null;
   return {
-    baseUrl: baseUrl.replace(/\/+$/, ''),
-    model,
-    apiKey: process.env.GITNEXUS_EMBEDDING_API_KEY ?? 'unused',
-    dimensions,
+    url: resolved.baseUrl,
+    model: resolved.model,
+    apiKey: resolved.apiKey,
+    dimensions: resolved.dimensions,
   };
 };
 
 /**
- * Check whether HTTP embedding mode is active (env vars are set).
+ * Build config by merging sources: in-memory override > env vars > config.json.
+ * Returns null when no embedding endpoint is configured anywhere.
  */
-export const isHttpMode = (): boolean => readConfig() !== null;
+const readConfig = async (): Promise<HttpConfig | null> => {
+  // Source 1: Environment variables (highest priority)
+  const envUrl = process.env.GITNEXUS_EMBEDDING_URL;
+  const envModel = process.env.GITNEXUS_EMBEDDING_MODEL;
+
+  if (envUrl && envModel) {
+    return {
+      baseUrl: envUrl.replace(/\/+$/, ''),
+      model: envModel,
+      apiKey: process.env.GITNEXUS_EMBEDDING_API_KEY ?? 'unused',
+      dimensions: parseDims(process.env.GITNEXUS_EMBEDDING_DIMS),
+    };
+  }
+
+  // Source 2: In-memory override (from API call)
+  if (_configOverride?.url && _configOverride?.model) {
+    return {
+      baseUrl: _configOverride.url.replace(/\/+$/, ''),
+      model: _configOverride.model,
+      apiKey: _configOverride.apiKey ?? 'unused',
+      dimensions: _configOverride.dimensions,
+    };
+  }
+
+  // Source 3: Persistent config (~/.gitnexus/config.json)
+  try {
+    const cliConfig = await loadCLIConfig();
+    const emb = cliConfig.embedding;
+    if (emb?.url && emb?.model) {
+      return {
+        baseUrl: emb.url.replace(/\/+$/, ''),
+        model: emb.model,
+        apiKey: emb.apiKey ?? 'unused',
+        dimensions: emb.dimensions,
+      };
+    }
+  } catch {
+    // Config file unreadable — fall through
+  }
+
+  return null;
+};
+
+/** Synchronous version for isHttpMode() — checks env + override + cached config */
+let _cachedFileConfig: StoredEmbeddingConfig | undefined;
+let _cachedFileConfigLoaded = false;
+
+const readConfigSync = (): HttpConfig | null => {
+  const envUrl = process.env.GITNEXUS_EMBEDDING_URL;
+  const envModel = process.env.GITNEXUS_EMBEDDING_MODEL;
+  if (envUrl && envModel) {
+    return {
+      baseUrl: envUrl.replace(/\/+$/, ''),
+      model: envModel,
+      apiKey: process.env.GITNEXUS_EMBEDDING_API_KEY ?? 'unused',
+      dimensions: parseDims(process.env.GITNEXUS_EMBEDDING_DIMS),
+    };
+  }
+
+  if (_configOverride?.url && _configOverride?.model) {
+    return {
+      baseUrl: _configOverride.url.replace(/\/+$/, ''),
+      model: _configOverride.model,
+      apiKey: _configOverride.apiKey ?? 'unused',
+      dimensions: _configOverride.dimensions,
+    };
+  }
+
+  if (_cachedFileConfig?.url && _cachedFileConfig?.model) {
+    return {
+      baseUrl: _cachedFileConfig.url.replace(/\/+$/, ''),
+      model: _cachedFileConfig.model,
+      apiKey: _cachedFileConfig.apiKey ?? 'unused',
+      dimensions: _cachedFileConfig.dimensions,
+    };
+  }
+
+  return null;
+};
+
+/** Warm the file config cache (call during init) */
+export const warmConfigCache = async (): Promise<void> => {
+  if (_cachedFileConfigLoaded) return;
+  try {
+    const cliConfig = await loadCLIConfig();
+    _cachedFileConfig = cliConfig.embedding;
+  } catch { /* ignore */ }
+  _cachedFileConfigLoaded = true;
+};
+
+const parseDims = (raw: string | undefined): number | undefined => {
+  if (raw === undefined) return undefined;
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    throw new Error(
+      `GITNEXUS_EMBEDDING_DIMS must be a positive integer, got "${raw}"`,
+    );
+  }
+  return parsed;
+};
+
+/**
+ * Check whether HTTP embedding mode is active (env vars / config set).
+ * Synchronous — uses cached file config. Call warmConfigCache() during init.
+ */
+export const isHttpMode = (): boolean => readConfigSync() !== null;
 
 /**
  * Return the configured embedding dimensions for HTTP mode, or undefined
  * if HTTP mode is not active or no explicit dimensions are set.
  */
-export const getHttpDimensions = (): number | undefined => readConfig()?.dimensions;
+export const getHttpDimensions = (): number | undefined => readConfigSync()?.dimensions;
 
 /**
  * Return a safe representation of a URL for error messages.
@@ -152,7 +261,7 @@ const httpEmbedBatch = async (
 export const httpEmbed = async (texts: string[]): Promise<Float32Array[]> => {
   if (texts.length === 0) return [];
 
-  const config = readConfig();
+  const config = await readConfig();
   if (!config) throw new Error('HTTP embedding not configured');
 
   const url = `${config.baseUrl}/embeddings`;
@@ -200,7 +309,7 @@ export const httpEmbed = async (texts: string[]): Promise<Float32Array[]> => {
  * @returns Embedding vector as number array
  */
 export const httpEmbedQuery = async (text: string): Promise<number[]> => {
-  const config = readConfig();
+  const config = await readConfig();
   if (!config) throw new Error('HTTP embedding not configured');
 
   const url = `${config.baseUrl}/embeddings`;

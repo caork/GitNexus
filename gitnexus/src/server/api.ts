@@ -12,7 +12,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
-import { loadMeta, listRegisteredRepos } from '../storage/repo-manager.js';
+import { loadMeta, listRegisteredRepos, loadCLIConfig, saveCLIConfig } from '../storage/repo-manager.js';
 import { executeQuery, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
 import { NODE_TABLES } from '../core/lbug/schema.js';
 import { GraphNode, GraphRelationship } from '../core/graph/types.js';
@@ -194,6 +194,10 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   // Initialize MCP backend (multi-repo, shared across all MCP sessions)
   const backend = new LocalBackend();
   await backend.init();
+
+  // Warm embedding config cache so isHttpMode() works synchronously
+  const { warmConfigCache } = await import('../core/embeddings/http-client.js');
+  await warmConfigCache();
   const cleanupMcp = mountMCPEndpoints(app, backend);
 
   // Helper: resolve a repo by name from the global registry, or default to first
@@ -400,6 +404,108 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       res.json(result);
     } catch (err: any) {
       res.status(statusFromError(err)).json({ error: err.message || 'Failed to query cluster detail' });
+    }
+  });
+
+  // ─── Embedding Config API ───────────────────────────────────────────
+
+  // GET current embedding configuration (API key masked)
+  app.get('/api/config/embedding', async (_req, res) => {
+    try {
+      const config = await loadCLIConfig();
+      const emb = config.embedding;
+      if (!emb?.url) {
+        res.json({ configured: false });
+        return;
+      }
+      res.json({
+        configured: true,
+        url: emb.url,
+        model: emb.model,
+        dimensions: emb.dimensions,
+        apiKey: emb.apiKey ? `${emb.apiKey.slice(0, 8)}...` : undefined,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // PUT update embedding configuration
+  app.put('/api/config/embedding', async (req, res) => {
+    try {
+      const { url, model, apiKey, dimensions } = req.body;
+      if (!url || !model) {
+        res.status(400).json({ error: 'Missing required fields: url, model' });
+        return;
+      }
+      if (dimensions !== undefined && (!Number.isInteger(dimensions) || dimensions <= 0)) {
+        res.status(400).json({ error: 'dimensions must be a positive integer' });
+        return;
+      }
+
+      const config = await loadCLIConfig();
+      config.embedding = {
+        url: String(url).replace(/\/+$/, ''),
+        model: String(model),
+        apiKey: apiKey ? String(apiKey) : undefined,
+        dimensions: dimensions ? Number(dimensions) : undefined,
+      };
+      await saveCLIConfig(config);
+
+      // Apply in-memory so subsequent embed calls use the new config immediately
+      const { setEmbeddingConfig, warmConfigCache } = await import('../core/embeddings/http-client.js');
+      setEmbeddingConfig(config.embedding);
+      await warmConfigCache();
+
+      res.json({ status: 'ok', embedding: { url: config.embedding.url, model: config.embedding.model, dimensions: config.embedding.dimensions } });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // DELETE remove embedding configuration
+  app.delete('/api/config/embedding', async (_req, res) => {
+    try {
+      const config = await loadCLIConfig();
+      delete config.embedding;
+      await saveCLIConfig(config);
+
+      const { setEmbeddingConfig } = await import('../core/embeddings/http-client.js');
+      setEmbeddingConfig(null);
+
+      res.json({ status: 'ok' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST test embedding configuration (sends a test query to the endpoint)
+  app.post('/api/config/embedding/test', async (req, res) => {
+    try {
+      const { url, model, apiKey, dimensions } = req.body;
+      if (!url || !model) {
+        res.status(400).json({ error: 'Missing required fields: url, model' });
+        return;
+      }
+
+      // Temporarily apply config for the test
+      const { setEmbeddingConfig } = await import('../core/embeddings/http-client.js');
+      const prevOverride = await import('../core/embeddings/http-client.js').then(m => m.getActiveEmbeddingConfig());
+      setEmbeddingConfig({ url, model, apiKey, dimensions });
+
+      try {
+        const { httpEmbedQuery } = await import('../core/embeddings/http-client.js');
+        const vec = await httpEmbedQuery('test connection');
+        res.json({ status: 'ok', dimensions: vec.length, message: `Embedding endpoint returned ${vec.length}-dimensional vector` });
+      } catch (testErr: any) {
+        res.status(400).json({ status: 'error', error: testErr.message });
+      } finally {
+        // Restore previous config
+        const prev = await prevOverride;
+        setEmbeddingConfig(prev);
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
