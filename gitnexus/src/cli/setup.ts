@@ -29,16 +29,19 @@ interface SetupResult {
  * The MCP server entry for all editors.
  * On Windows, npx must be invoked via cmd /c since it's a .cmd script.
  */
-function getMcpEntry() {
+function getMcpEntry(remoteUrl?: string) {
+  const baseArgs = ['-y', 'gitnexus@latest', 'mcp'];
+  if (remoteUrl) baseArgs.push('--remote', remoteUrl);
+
   if (process.platform === 'win32') {
     return {
       command: 'cmd',
-      args: ['/c', 'npx', '-y', 'gitnexus@latest', 'mcp'],
+      args: ['/c', 'npx', ...baseArgs],
     };
   }
   return {
     command: 'npx',
-    args: ['-y', 'gitnexus@latest', 'mcp'],
+    args: baseArgs,
   };
 }
 
@@ -46,6 +49,9 @@ function getMcpEntry() {
  * Merge gitnexus entry into an existing MCP config JSON object.
  * Returns the updated config.
  */
+/** Module-level remote URL — set by setupCommand when --remote is passed */
+let _remoteUrl: string | undefined;
+
 function mergeMcpConfig(existing: any): any {
   if (!existing || typeof existing !== 'object') {
     existing = {};
@@ -53,7 +59,7 @@ function mergeMcpConfig(existing: any): any {
   if (!existing.mcpServers || typeof existing.mcpServers !== 'object') {
     existing.mcpServers = {};
   }
-  existing.mcpServers.gitnexus = getMcpEntry();
+  existing.mcpServers.gitnexus = getMcpEntry(_remoteUrl);
   return existing;
 }
 
@@ -235,7 +241,7 @@ async function setupOpenCode(result: SetupResult): Promise<void> {
     const existing = await readJsonFile(configPath);
     const config = existing || {};
     if (!config.mcp) config.mcp = {};
-    config.mcp.gitnexus = getMcpEntry();
+    config.mcp.gitnexus = getMcpEntry(_remoteUrl);
     await writeJsonFile(configPath, config);
     result.configured.push('OpenCode');
   } catch (err: any) {
@@ -247,7 +253,7 @@ async function setupOpenCode(result: SetupResult): Promise<void> {
  * Build a TOML section for Codex MCP config (~/.codex/config.toml).
  */
 function getCodexMcpTomlSection(): string {
-  const entry = getMcpEntry();
+  const entry = getMcpEntry(_remoteUrl);
   const command = JSON.stringify(entry.command);
   const args = `[${entry.args.map(arg => JSON.stringify(arg)).join(', ')}]`;
   return `[mcp_servers.gitnexus]\ncommand = ${command}\nargs = ${args}\n`;
@@ -285,7 +291,7 @@ async function setupCodex(result: SetupResult): Promise<void> {
   }
 
   try {
-    const entry = getMcpEntry();
+    const entry = getMcpEntry(_remoteUrl);
     await execFileAsync(
       'codex',
       ['mcp', 'add', 'gitnexus', '--', entry.command, ...entry.args],
@@ -440,7 +446,8 @@ async function installCodexSkills(result: SetupResult): Promise<void> {
 
 // ─── Main command ──────────────────────────────────────────────────
 
-export const setupCommand = async () => {
+export const setupCommand = async (options?: { remote?: string }) => {
+  _remoteUrl = options?.remote;
   console.log('');
   console.log('  GitNexus Setup');
   console.log('  ==============');

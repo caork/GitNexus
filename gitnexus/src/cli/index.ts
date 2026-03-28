@@ -19,6 +19,7 @@ program
 program
   .command('setup')
   .description('One-time setup: configure MCP for Cursor, Claude Code, OpenCode, Codex')
+  .option('--remote <url>', 'Configure editors to use a remote GitNexus service (e.g., http://server:4747)')
   .action(createLazyAction(() => import('./setup.js'), 'setupCommand'));
 
 
@@ -50,6 +51,7 @@ program
 program
   .command('mcp')
   .description('Start MCP server (stdio) — serves all indexed repos')
+  .option('--remote <url>', 'Connect to a remote GitNexus service instead of local index (e.g., http://server:4747)')
   .action(createLazyAction(() => import('./mcp.js'), 'mcpCommand'));
 
 program

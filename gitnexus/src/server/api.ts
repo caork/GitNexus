@@ -21,7 +21,10 @@ import { hybridSearch } from '../core/search/hybrid-search.js';
 // Embedding imports are lazy (dynamic import) to avoid loading onnxruntime-node
 // at server startup — crashes on unsupported Node ABI versions (#89)
 import { LocalBackend } from '../mcp/local/local-backend.js';
+import type { Backend } from '../mcp/backend.js';
+import { readResource } from '../mcp/resources.js';
 import { mountMCPEndpoints } from './mcp-http.js';
+import { createRequire } from 'module';
 
 /**
  * Determine whether an HTTP Origin header value is allowed by CORS policy.
@@ -397,6 +400,95 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       res.json(result);
     } catch (err: any) {
       res.status(statusFromError(err)).json({ error: err.message || 'Failed to query cluster detail' });
+    }
+  });
+
+  // ─── Service API (for RemoteBackend clients) ────────────────────────
+
+  // Health check
+  const _require = createRequire(import.meta.url);
+  const pkgVersion: string = _require('../../package.json').version;
+
+  app.get('/api/health', async (_req, res) => {
+    try {
+      const repos = await backend.listRepos();
+      res.json({ status: 'ok', version: pkgVersion, repos: repos.length });
+    } catch (err: any) {
+      res.status(500).json({ status: 'error', error: err.message });
+    }
+  });
+
+  // Generic tool dispatch — mirrors backend.callTool(method, params)
+  app.post('/api/tools/:method', async (req, res) => {
+    const method = req.params.method;
+    try {
+      const result = await backend.callTool(method, req.body || {});
+      res.json({ result });
+    } catch (err: any) {
+      res.status(statusFromError(err)).json({ error: err.message || 'Tool call failed' });
+    }
+  });
+
+  // Resource read — mirrors readResource(uri, backend)
+  app.get('/api/resources', async (req, res) => {
+    const uri = req.query.uri as string;
+    if (!uri) {
+      res.status(400).json({ error: 'Missing "uri" query parameter' });
+      return;
+    }
+    try {
+      const content = await readResource(uri, backend);
+      res.json({ content, mimeType: 'text/yaml' });
+    } catch (err: any) {
+      res.status(statusFromError(err)).json({ error: err.message || 'Resource read failed' });
+    }
+  });
+
+  // Internal endpoints for RemoteBackend resource backing
+  app.post('/api/internal/context-info', async (req, res) => {
+    try {
+      const repo = await backend.resolveRepo(req.body?.repoName);
+      const repoId = repo.name.toLowerCase();
+      const context = backend.getContext(repoId) || backend.getContext();
+      res.json({ context, repo: { name: repo.name, repoPath: repo.repoPath, lastCommit: repo.lastCommit } });
+    } catch (err: any) {
+      res.status(statusFromError(err)).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/internal/clusters', async (req, res) => {
+    try {
+      const result = await backend.queryClusters(req.body?.repoName, req.body?.limit);
+      res.json(result);
+    } catch (err: any) {
+      res.status(statusFromError(err)).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/internal/processes', async (req, res) => {
+    try {
+      const result = await backend.queryProcesses(req.body?.repoName, req.body?.limit);
+      res.json(result);
+    } catch (err: any) {
+      res.status(statusFromError(err)).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/internal/cluster-detail', async (req, res) => {
+    try {
+      const result = await backend.queryClusterDetail(req.body?.name, req.body?.repoName);
+      res.json(result);
+    } catch (err: any) {
+      res.status(statusFromError(err)).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/internal/process-detail', async (req, res) => {
+    try {
+      const result = await backend.queryProcessDetail(req.body?.name, req.body?.repoName);
+      res.json(result);
+    } catch (err: any) {
+      res.status(statusFromError(err)).json({ error: err.message });
     }
   });
 

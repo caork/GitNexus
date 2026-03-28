@@ -19,6 +19,7 @@ import {
   cleanupOldKuzuFiles,
   type RegistryEntry,
 } from '../../storage/repo-manager.js';
+import type { Backend } from '../backend.js';
 // AI context generation is CLI-only (gitnexus analyze)
 // import { generateAIContextFiles } from '../../cli/ai-context.js';
 
@@ -118,7 +119,7 @@ interface RepoHandle {
   stats?: RegistryEntry['stats'];
 }
 
-export class LocalBackend {
+export class LocalBackend implements Backend {
   private repos: Map<string, RepoHandle> = new Map();
   private contextCache: Map<string, CodebaseContext> = new Map();
   private initializedRepos: Set<string> = new Set();
