@@ -43,19 +43,19 @@ https://github.com/user-attachments/assets/172685ba-8e54-4ea7-9ad1-e31a3398da72
 [![Star History Chart](https://api.star-history.com/svg?repos=abhigyanpatwari/GitNexus&type=date&legend=top-left)](https://www.star-history.com/#abhigyanpatwari/GitNexus&type=date&legend=top-left)
 
 
-## Two Ways to Use GitNexus
+## Three Ways to Use GitNexus
 
-|                   | **CLI + MCP**                                            | **Web UI**                                             |
-| ----------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
-| **What**    | Index repos locally, connect AI agents via MCP                 | Visual graph explorer + AI chat in browser                   |
-| **For**     | Daily development with Cursor, Claude Code, Codex, Windsurf, OpenCode | Quick exploration, demos, one-off analysis                   |
-| **Scale**   | Full repos, any size                                           | Limited by browser memory (~5k files), or unlimited via backend mode |
-| **Install** | `npm install -g gitnexus`                                    | No install —[gitnexus.vercel.app](https://gitnexus.vercel.app) |
-| **Storage** | LadybugDB native (fast, persistent)                               | LadybugDB WASM (in-memory, per session)                         |
-| **Parsing** | Tree-sitter native bindings                                    | Tree-sitter WASM                                             |
-| **Privacy** | Everything local, no network                                   | Everything in-browser, no server                             |
+|                   | **CLI + MCP (local)**                                  | **Service/Client (team)**                                | **Web UI**                                             |
+| ----------------- | -------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **What**    | Index repos locally, connect AI agents via MCP                 | Central server indexes shared libs, devs query remotely      | Visual graph explorer + AI chat in browser                   |
+| **For**     | Solo dev with Cursor, Claude Code, Codex, Windsurf, OpenCode   | Teams sharing common library knowledge graphs                | Quick exploration, demos, one-off analysis                   |
+| **Scale**   | Full repos, any size                                           | Full repos, any size, shared across team                     | Limited by browser memory (~5k files), or unlimited via backend mode |
+| **Install** | `npm install -g gitnexus`                                    | Server: `gitnexus serve`, Client: `gitnexus mcp --remote`   | No install — [gitnexus.vercel.app](https://gitnexus.vercel.app) |
+| **Storage** | LadybugDB native (fast, persistent)                               | LadybugDB on server, clients are stateless                      | LadybugDB WASM (in-memory, per session)                         |
+| **Embedding** | Local model or external API                                  | External API configured via `/api/config/embedding`          | In-browser transformers.js                                   |
+| **Privacy** | Everything local, no network                                   | Code stays on server, queries over LAN/VPN                   | Everything in-browser, no server                             |
 
-> **Bridge mode:** `gitnexus serve` connects the two — the web UI auto-detects the local server and can browse all your CLI-indexed repos without re-uploading or re-indexing.
+> **Bridge mode:** `gitnexus serve` connects the CLI and Web UI — the web UI auto-detects the local server and can browse all your CLI-indexed repos without re-uploading or re-indexing.
 
 ---
 
@@ -173,7 +173,9 @@ gitnexus analyze --skip-embeddings  # Skip embedding generation (faster)
 gitnexus analyze --embeddings     # Enable embedding generation (slower, better search)
 gitnexus analyze --verbose        # Log skipped files when parsers are unavailable
 gitnexus mcp                     # Start MCP server (stdio) — serves all indexed repos
+gitnexus mcp --remote <url>     # Start MCP client — proxy to a remote GitNexus service
 gitnexus serve                   # Start local HTTP server (multi-repo) for web UI connection
+gitnexus serve --host 0.0.0.0   # Expose service to network (for team use)
 gitnexus list                    # List all indexed repositories
 gitnexus status                  # Show index status for current repo
 gitnexus clean                   # Delete index for current repo
@@ -276,6 +278,83 @@ flowchart TD
 ```
 
 **How it works:** Each `gitnexus analyze` stores the index in `.gitnexus/` inside the repo (portable, gitignored) and registers a pointer in `~/.gitnexus/registry.json`. When an AI agent starts, the MCP server reads the registry and can serve any indexed repo. LadybugDB connections are opened lazily on first query and evicted after 5 minutes of inactivity (max 5 concurrent). If only one repo is indexed, the `repo` parameter is optional on all tools — agents don't need to change anything.
+
+---
+
+## Service/Client Mode (Team Shared Libraries)
+
+For teams that want to centrally index shared/common libraries so all developers' AI agents can understand them, GitNexus supports a **service/client split**:
+
+- **Service** — runs on a central server with the full repo clone, builds the graph index, and exposes an HTTP API
+- **Client** — runs on each developer's machine, proxies MCP tool calls to the remote service
+
+```
+Service (central server)                    Client (developer machine)
+┌──────────────────────────────┐           ┌──────────────────────────────┐
+│  gitnexus serve --host 0.0.0.0│           │  Claude Code / Cursor         │
+│  Express HTTP API             │◄── HTTP ──│  ↓ MCP stdio                  │
+│  └─ LocalBackend → LadybugDB  │           │  gitnexus mcp --remote URL    │
+└──────────────────────────────┘           └──────────────────────────────┘
+```
+
+### Service Setup (central server)
+
+```bash
+# 1. Clone and index shared libraries
+cd /shared/repos/common-lib
+npm install -g gitnexus
+gitnexus analyze --embeddings
+
+# 2. Configure external embedding provider (optional, replaces local model)
+curl -X PUT http://localhost:4747/api/config/embedding \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://api.openai.com/v1",
+    "model": "text-embedding-3-small",
+    "apiKey": "sk-xxx",
+    "dimensions": 1536
+  }'
+
+# 3. Start the service (bind to all interfaces)
+gitnexus serve --host 0.0.0.0
+```
+
+### Client Setup (developer machines)
+
+```bash
+# Option A: Configure Claude Code directly
+claude mcp add gitnexus -- npx gitnexus mcp --remote http://server:4747
+
+# Option B: One-click setup for all editors
+npx gitnexus setup --remote http://server:4747
+
+# Option C: Environment variable
+export GITNEXUS_SERVER_URL=http://server:4747
+claude mcp add gitnexus -- npx gitnexus mcp
+```
+
+No `gitnexus analyze` needed on client machines — all queries go through the service.
+
+### Embedding Config API
+
+Configure external embedding providers (OpenAI, self-hosted, etc.) via HTTP API on the service:
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/api/config/embedding` | View current config (API key masked) |
+| `PUT` | `/api/config/embedding` | Set provider: `url`, `model`, `apiKey`, `dimensions` |
+| `DELETE` | `/api/config/embedding` | Remove config (fall back to local model) |
+| `POST` | `/api/config/embedding/test` | Test endpoint connectivity, returns actual dimensions |
+
+Example with self-hosted model (Ollama):
+
+```bash
+curl -X PUT http://server:4747/api/config/embedding \
+  -H 'Content-Type: application/json' \
+  -d '{"url": "http://localhost:11434/v1", "model": "nomic-embed-text", "dimensions": 768}'
+```
+
+Config is persisted to `~/.gitnexus/config.json` and survives service restarts. Environment variables (`GITNEXUS_EMBEDDING_URL`, etc.) override the saved config when set.
 
 ---
 
