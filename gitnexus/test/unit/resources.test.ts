@@ -37,9 +37,9 @@ function createMockBackend(overrides: Partial<Record<string, any>> = {}): any {
 // ─── Static definitions ─────────────────────────────────────────────
 
 describe('getResourceDefinitions', () => {
-  it('returns 2 static resources', () => {
+  it('returns 3 static resources', () => {
     const defs = getResourceDefinitions();
-    expect(defs).toHaveLength(2);
+    expect(defs).toHaveLength(3);
   });
 
   it('includes repos resource', () => {

@@ -39,6 +39,12 @@ export function getResourceDefinitions(): ResourceDefinition[] {
       description: 'Returns AGENTS.md content for all indexed repos. Useful for setup/onboarding.',
       mimeType: 'text/markdown',
     },
+    {
+      uri: 'gitnexus://ontology',
+      name: 'Ontology Schema',
+      description: 'Object Types, Link Types, Interfaces, and Shared Properties. Read to understand entity types, their relationships, cardinality, and polymorphic interfaces.',
+      mimeType: 'text/yaml',
+    },
   ];
 }
 
@@ -92,6 +98,7 @@ export function getResourceTemplates(): ResourceTemplate[] {
 function parseUri(uri: string): { repoName?: string; resourceType: string; param?: string } {
   if (uri === 'gitnexus://repos') return { resourceType: 'repos' };
   if (uri === 'gitnexus://setup') return { resourceType: 'setup' };
+  if (uri === 'gitnexus://ontology') return { resourceType: 'ontology' };
 
   // Repo-scoped: gitnexus://repo/{name}/context
   const repoMatch = uri.match(/^gitnexus:\/\/repo\/([^/]+)\/(.+)$/);
@@ -126,6 +133,11 @@ export async function readResource(uri: string, backend: Backend): Promise<strin
   // Setup resource — returns AGENTS.md content for all repos
   if (parsed.resourceType === 'setup') {
     return getSetupResource(backend);
+  }
+
+  // Ontology schema — typed Object Types, Link Types, Interfaces
+  if (parsed.resourceType === 'ontology') {
+    return getOntologyResource();
   }
 
   const repoName = parsed.repoName;
@@ -483,4 +495,52 @@ async function getSetupResource(backend: Backend): Promise<string> {
   }
   
   return sections.join('\n\n---\n\n');
+}
+
+/**
+ * Ontology resource — compact YAML summary of the schema for AI agents
+ */
+async function getOntologyResource(): Promise<string> {
+  const { loadOntology } = await import('../core/ontology/ontology-manager.js');
+  const schema = await loadOntology();
+
+  const lines: string[] = [
+    `ontology: "${schema.name}"`,
+    `version: "${schema.version}"`,
+    '',
+    'interfaces:',
+  ];
+
+  for (const iface of schema.interfaces) {
+    lines.push(`  - name: "${iface.apiName}"`);
+    if (iface.extends?.length) lines.push(`    extends: [${iface.extends.map(e => `"${e}"`).join(', ')}]`);
+    lines.push(`    properties: [${iface.properties.map(p => p.apiName).join(', ')}]`);
+  }
+
+  lines.push('');
+  lines.push('object_types:');
+  for (const ot of schema.objectTypes.filter(t => t.status === 'active')) {
+    lines.push(`  - name: "${ot.apiName}"`);
+    lines.push(`    display: "${ot.displayName}"`);
+    if (ot.interfaces.length) lines.push(`    implements: [${ot.interfaces.map(i => `"${i}"`).join(', ')}]`);
+    if (ot.sourceLabels.length > 1 || ot.sourceLabels[0] !== ot.apiName) {
+      lines.push(`    maps_from: [${ot.sourceLabels.map(l => `"${l}"`).join(', ')}]`);
+    }
+  }
+
+  lines.push('');
+  lines.push('link_types:');
+  for (const lt of schema.linkTypes.filter(t => t.status === 'active')) {
+    lines.push(`  - name: "${lt.apiName}"`);
+    lines.push(`    from: "${lt.sourceType}" → to: "${lt.targetType}"`);
+    lines.push(`    cardinality: ${lt.cardinality}`);
+  }
+
+  lines.push('');
+  lines.push('shared_properties:');
+  for (const sp of schema.sharedProperties) {
+    lines.push(`  - ${sp.apiName}: ${sp.baseType}`);
+  }
+
+  return lines.join('\n');
 }

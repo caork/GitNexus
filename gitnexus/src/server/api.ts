@@ -406,6 +406,102 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
+  // ─── Ontology Schema API ────────────────────────────────────────────
+
+  // GET ontology schema (full)
+  app.get('/api/ontology/schema', async (_req, res) => {
+    try {
+      const { loadOntology } = await import('../core/ontology/ontology-manager.js');
+      const schema = await loadOntology();
+      res.json(schema);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET ontology summary (compact — for AI agents)
+  app.get('/api/ontology/summary', async (_req, res) => {
+    try {
+      const { loadOntology } = await import('../core/ontology/ontology-manager.js');
+      const schema = await loadOntology();
+      res.json({
+        version: schema.version,
+        name: schema.name,
+        interfaces: schema.interfaces.map(i => ({
+          apiName: i.apiName, displayName: i.displayName, extends: i.extends,
+          properties: i.properties.map(p => p.apiName),
+        })),
+        objectTypes: schema.objectTypes.map(ot => ({
+          apiName: ot.apiName, displayName: ot.displayName,
+          interfaces: ot.interfaces, status: ot.status,
+          sourceLabels: ot.sourceLabels,
+        })),
+        linkTypes: schema.linkTypes.map(lt => ({
+          apiName: lt.apiName, displayName: lt.displayName,
+          sourceType: lt.sourceType, targetType: lt.targetType,
+          cardinality: lt.cardinality, status: lt.status,
+        })),
+        sharedProperties: schema.sharedProperties.map(sp => ({
+          apiName: sp.apiName, baseType: sp.baseType,
+        })),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // PUT save custom ontology schema
+  app.put('/api/ontology/schema', async (req, res) => {
+    try {
+      const schema = req.body;
+      if (!schema?.version || !schema?.objectTypes || !schema?.linkTypes) {
+        res.status(400).json({ error: 'Invalid schema: must have version, objectTypes, linkTypes' });
+        return;
+      }
+      const { saveOntology } = await import('../core/ontology/ontology-manager.js');
+      await saveOntology(schema);
+      res.json({ status: 'ok', version: schema.version, objectTypes: schema.objectTypes.length, linkTypes: schema.linkTypes.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // DELETE reset to default ontology
+  app.delete('/api/ontology/schema', async (_req, res) => {
+    try {
+      const { resetOntology } = await import('../core/ontology/ontology-manager.js');
+      const defaultSchema = await resetOntology();
+      res.json({ status: 'ok', version: defaultSchema.version });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET resolve a NodeLabel to its Object Type
+  app.get('/api/ontology/resolve', async (req, res) => {
+    try {
+      const { loadOntology, resolveObjectType, resolveLinkType, getInterfacesForType } = await import('../core/ontology/ontology-manager.js');
+      const schema = await loadOntology();
+      const nodeLabel = req.query.nodeLabel as string | undefined;
+      const relType = req.query.relType as string | undefined;
+
+      const result: any = {};
+      if (nodeLabel) {
+        const objectType = resolveObjectType(schema, nodeLabel);
+        result.objectType = objectType;
+        if (objectType) {
+          result.interfaces = getInterfacesForType(schema, objectType);
+        }
+      }
+      if (relType) {
+        result.linkType = resolveLinkType(schema, relType);
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ─── Embedding Config API ───────────────────────────────────────────
 
   // GET current embedding configuration (API key masked)
