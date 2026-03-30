@@ -191,24 +191,6 @@ describe('HTTP embedding backend', () => {
 
     });
 
-    it('rejects initEmbedder when using HTTP backend', async () => {
-      process.env.GITNEXUS_EMBEDDING_URL = 'http://test:8080/v1';
-      process.env.GITNEXUS_EMBEDDING_MODEL = 'test-model';
-
-      const { initEmbedder } = await import('../../src/core/embeddings/embedder.js');
-      await expect(initEmbedder()).rejects.toThrow('HTTP mode');
-
-    });
-
-    it('rejects getEmbedder when using HTTP backend', async () => {
-      process.env.GITNEXUS_EMBEDDING_URL = 'http://test:8080/v1';
-      process.env.GITNEXUS_EMBEDDING_MODEL = 'test-model';
-
-      const { getEmbedder } = await import('../../src/core/embeddings/embedder.js');
-      expect(() => getEmbedder()).toThrow('HTTP embedding mode');
-
-    });
-
     it('throws on empty response from endpoint', async () => {
       process.env.GITNEXUS_EMBEDDING_URL = 'http://test:8080/v1';
       process.env.GITNEXUS_EMBEDDING_MODEL = 'test-model';

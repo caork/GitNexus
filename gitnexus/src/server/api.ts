@@ -18,8 +18,7 @@ import { NODE_TABLES } from '../core/lbug/schema.js';
 import { GraphNode, GraphRelationship } from '../core/graph/types.js';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
 import { hybridSearch } from '../core/search/hybrid-search.js';
-// Embedding imports are lazy (dynamic import) to avoid loading onnxruntime-node
-// at server startup — crashes on unsupported Node ABI versions (#89)
+// Embedding imports are lazy (dynamic import) — only needed when HTTP endpoint is configured
 import { LocalBackend } from '../mcp/local/local-backend.js';
 import type { Backend } from '../mcp/backend.js';
 import { readResource } from '../mcp/resources.js';

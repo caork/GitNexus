@@ -9,14 +9,13 @@
  * 5. Create vector index for semantic search
  */
 
-import { initEmbedder, embedBatch, embedText, embeddingToArray, isEmbedderReady } from './embedder.js';
+import { embedBatch, embedText, embeddingToArray, isEmbedderReady } from './embedder.js';
 import { generateBatchEmbeddingTexts, generateEmbeddingText } from './text-generator.js';
 import {
   type EmbeddingProgress,
   type EmbeddingConfig,
   type EmbeddableNode,
   type SemanticSearchResult,
-  type ModelProgress,
   DEFAULT_EMBEDDING_CONFIG,
   EMBEDDABLE_LABELS,
 } from './types.js';
@@ -162,14 +161,11 @@ export const runEmbeddingPipeline = async (
     });
 
     if (!isEmbedderReady()) {
-      await initEmbedder((modelProgress: ModelProgress) => {
-        const downloadPercent = modelProgress.progress ?? 0;
-        onProgress({
-          phase: 'loading-model',
-          percent: Math.round(downloadPercent * 0.2),
-          modelDownloadPercent: downloadPercent,
-        });
-      }, finalConfig);
+      throw new Error(
+        'Embedding endpoint not configured. ' +
+        'Set via API: PUT /api/config/embedding {url, model, apiKey, dimensions} ' +
+        'or env: GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL'
+      );
     }
 
     onProgress({
