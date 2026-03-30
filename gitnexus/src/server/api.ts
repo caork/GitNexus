@@ -93,6 +93,90 @@ export const isAllowedOrigin = (origin: string | undefined): boolean => {
   return false;
 };
 
+// ─── Graph Snapshot Cache ──────────────────────────────────────────────
+// Pre-serialize graph JSON to disk so repeated web UI loads are instant.
+// Snapshots are stored at <storagePath>/graph-snapshot.json alongside the
+// LadybugDB files and invalidated when meta.indexedAt changes.
+
+const SNAPSHOT_FILE = 'graph-snapshot.json';
+
+interface GraphSnapshot {
+  indexedAt: string;   // tracks freshness — compared against meta.json
+  nodes: GraphNode[];
+  relationships: GraphRelationship[];
+}
+
+/** Read a cached snapshot if it exists and is still fresh. */
+const readSnapshot = async (storagePath: string): Promise<GraphSnapshot | null> => {
+  try {
+    const snapPath = path.join(storagePath, SNAPSHOT_FILE);
+    const raw = await fs.readFile(snapPath, 'utf-8');
+    const snap: GraphSnapshot = JSON.parse(raw);
+    // Validate freshness against meta.json
+    const meta = await loadMeta(storagePath);
+    if (meta && snap.indexedAt === meta.indexedAt) return snap;
+    return null; // stale
+  } catch {
+    return null;
+  }
+};
+
+/** Write a graph snapshot to disk. */
+const writeSnapshot = async (storagePath: string, snap: GraphSnapshot): Promise<void> => {
+  const snapPath = path.join(storagePath, SNAPSHOT_FILE);
+  await fs.writeFile(snapPath, JSON.stringify(snap), 'utf-8');
+};
+
+/** Delete a snapshot file. */
+const deleteSnapshot = async (storagePath: string): Promise<void> => {
+  try {
+    await fs.unlink(path.join(storagePath, SNAPSHOT_FILE));
+  } catch { /* file may not exist */ }
+};
+
+/** Build graph and cache it, or return from cache if fresh. */
+const getGraphCached = async (storagePath: string): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
+  // Try cache first
+  const cached = await readSnapshot(storagePath);
+  if (cached) return { nodes: cached.nodes, relationships: cached.relationships };
+
+  // Build from LadybugDB
+  const lbugPath = path.join(storagePath, 'lbug');
+  const graph = await withLbugDb(lbugPath, async () => buildGraph());
+
+  // Cache to disk asynchronously (don't block the response)
+  const meta = await loadMeta(storagePath);
+  if (meta) {
+    writeSnapshot(storagePath, { indexedAt: meta.indexedAt, ...graph }).catch(() => {});
+  }
+
+  return graph;
+};
+
+/** Pre-warm snapshot caches for all registered repos on server startup. */
+const warmSnapshotCaches = async (): Promise<void> => {
+  const repos = await listRegisteredRepos();
+  for (const repo of repos) {
+    try {
+      const cached = await readSnapshot(repo.storagePath);
+      if (!cached) {
+        console.log(`  Caching graph snapshot for ${repo.name}...`);
+        const lbugPath = path.join(repo.storagePath, 'lbug');
+        const graph = await withLbugDb(lbugPath, async () => buildGraph());
+        const meta = await loadMeta(repo.storagePath);
+        if (meta) {
+          await writeSnapshot(repo.storagePath, { indexedAt: meta.indexedAt, ...graph });
+        }
+        console.log(`  Cached ${repo.name}: ${graph.nodes.length} nodes, ${graph.relationships.length} edges`);
+      } else {
+        console.log(`  Snapshot cache fresh for ${repo.name}`);
+      }
+    } catch (err: any) {
+      console.warn(`  Failed to cache ${repo.name}: ${err.message}`);
+    }
+  }
+};
+
 const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
   const nodes: GraphNode[] = [];
   for (const table of NODE_TABLES) {
@@ -240,7 +324,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
-  // Get full graph
+  // Get full graph (served from disk cache when available)
   app.get('/api/graph', async (req, res) => {
     try {
       const entry = await resolveRepo(requestedRepo(req));
@@ -248,8 +332,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         res.status(404).json({ error: 'Repository not found' });
         return;
       }
-      const lbugPath = path.join(entry.storagePath, 'lbug');
-      const graph = await withLbugDb(lbugPath, async () => buildGraph());
+      const graph = await getGraphCached(entry.storagePath);
       res.json(graph);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to build graph' });
@@ -693,11 +776,84 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
+  // ─── Graph Management API ───────────────────────────────────────────────
+
+  // List all graph snapshots with their status
+  app.get('/api/graphs', async (_req, res) => {
+    try {
+      const repos = await listRegisteredRepos();
+      const graphs = await Promise.all(repos.map(async (repo) => {
+        const snap = await readSnapshot(repo.storagePath);
+        const meta = await loadMeta(repo.storagePath);
+        return {
+          name: repo.name,
+          path: repo.path,
+          indexedAt: meta?.indexedAt ?? repo.indexedAt,
+          stats: meta?.stats ?? repo.stats ?? {},
+          cached: !!snap,
+          cacheStale: snap ? snap.indexedAt !== meta?.indexedAt : false,
+        };
+      }));
+      res.json({ graphs });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Force rebuild snapshot cache for a specific repo
+  app.post('/api/graphs/:name/cache', async (req, res) => {
+    try {
+      const repos = await listRegisteredRepos();
+      const repo = repos.find(r => r.name === req.params.name);
+      if (!repo) { res.status(404).json({ error: 'Repository not found' }); return; }
+
+      const lbugPath = path.join(repo.storagePath, 'lbug');
+      const graph = await withLbugDb(lbugPath, async () => buildGraph());
+      const meta = await loadMeta(repo.storagePath);
+      if (meta) {
+        await writeSnapshot(repo.storagePath, { indexedAt: meta.indexedAt, ...graph });
+      }
+      res.json({ status: 'ok', nodes: graph.nodes.length, relationships: graph.relationships.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Delete snapshot cache for a specific repo
+  app.delete('/api/graphs/:name/cache', async (req, res) => {
+    try {
+      const repos = await listRegisteredRepos();
+      const repo = repos.find(r => r.name === req.params.name);
+      if (!repo) { res.status(404).json({ error: 'Repository not found' }); return; }
+
+      await deleteSnapshot(repo.storagePath);
+      res.json({ status: 'ok' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Rebuild all snapshot caches
+  app.post('/api/graphs/cache-all', async (_req, res) => {
+    try {
+      await warmSnapshotCaches();
+      res.json({ status: 'ok' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Global error handler — catch anything the route handlers miss
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error('Unhandled error:', err);
     res.status(500).json({ error: 'Internal server error' });
   });
+
+  // Pre-warm graph snapshot caches on startup (don't block the listener)
+  console.log('Warming graph snapshot caches...');
+  warmSnapshotCaches()
+    .then(() => console.log('Snapshot caches ready.'))
+    .catch((err) => console.warn('Snapshot cache warming failed:', err.message));
 
   const server = app.listen(port, host, () => {
     console.log(`GitNexus server running on http://${host}:${port}`);

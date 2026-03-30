@@ -1057,6 +1057,9 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
         setViewMode('exploring');
         startEmbeddingsWithFallback();
         setProgress(null);
+
+        // Update URL hash so refresh loads this repo
+        window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(pName)}`);
       } catch (err) {
         console.warn('Failed to load graph into LadybugDB:', err);
         setIsAgentReady(false);

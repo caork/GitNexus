@@ -171,55 +171,69 @@ const AppContent = () => {
     return loadGraphPromise;
   }, [setViewMode, setGraph, setFileContents, setProjectName, loadServerGraph, initializeAgent, startEmbeddingsWithFallback]);
 
-  // Auto-connect when ?server query param is present (bookmarkable shortcut)
+  // Auto-connect: detect server via /api/health (same origin or ?server param).
+  // On refresh, reads repo name from URL hash (#repo=Name) to restore session.
   const autoConnectRan = useRef(false);
   useEffect(() => {
     if (autoConnectRan.current) return;
-    const params = new URLSearchParams(window.location.search);
-    if (!params.has('server')) return;
     autoConnectRan.current = true;
 
-    // Clean the URL so a refresh won't re-trigger
-    const cleanUrl = window.location.pathname + window.location.hash;
-    window.history.replaceState(null, '', cleanUrl);
+    const params = new URLSearchParams(window.location.search);
+    const paramUrl = params.get('server');
 
-    setProgress({ phase: 'extracting', percent: 0, message: 'Connecting to server...', detail: 'Validating server' });
-    setViewMode('loading');
+    // Determine server URL: explicit ?server param, or same origin (Vite proxy)
+    const serverUrl = paramUrl || window.location.origin;
 
-    const serverUrl = params.get('server') || window.location.origin;
+    // Read repo name from URL hash (e.g. #repo=GitNexus)
+    const hashRepo = window.location.hash.match(/repo=([^&]+)/)?.[1] ?? undefined;
 
+    // Clean ?server param from URL (keep hash)
+    if (paramUrl) {
+      const cleanUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState(null, '', cleanUrl);
+    }
+
+    // Probe the server — if it responds, auto-connect
     const baseUrl = normalizeServerUrl(serverUrl);
+    fetch(`${baseUrl.replace(/\/api$/, '')}/api/health`)
+      .then(r => { if (!r.ok) throw new Error('not ok'); return r.json(); })
+      .then((health) => {
+        if (!health?.status || health.repos === 0) throw new Error('no repos');
 
-    connectToServer(serverUrl, (phase, downloaded, total) => {
-      if (phase === 'validating') {
-        setProgress({ phase: 'extracting', percent: 5, message: 'Connecting to server...', detail: 'Validating server' });
-      } else if (phase === 'downloading') {
-        const pct = total ? Math.round((downloaded / total) * 90) + 5 : 50;
-        const mb = (downloaded / (1024 * 1024)).toFixed(1);
-        setProgress({ phase: 'extracting', percent: pct, message: 'Downloading graph...', detail: `${mb} MB downloaded` });
-      } else if (phase === 'extracting') {
-        setProgress({ phase: 'extracting', percent: 97, message: 'Processing...', detail: 'Extracting file contents' });
-      }
-    }).then(async (result) => {
-      await handleServerConnect(result);
-      setProgress(null);
-      setServerBaseUrl(baseUrl);
-      fetchRepos(baseUrl)
-        .then((repos) => setAvailableRepos(repos))
-        .catch((e) => console.warn('Failed to fetch repo list:', e));
-    }).catch((err) => {
-      console.error('Auto-connect failed:', err);
-      setProgress({
-        phase: 'error',
-        percent: 0,
-        message: 'Failed to connect to server',
-        detail: err instanceof Error ? err.message : 'Unknown error',
-      });
-      setTimeout(() => {
-        setViewMode('onboarding');
+        setProgress({ phase: 'extracting', percent: 0, message: 'Connecting to server...', detail: 'Loading graph from server' });
+        setViewMode('loading');
+
+        return connectToServer(serverUrl, (phase, downloaded, total) => {
+          if (phase === 'validating') {
+            setProgress({ phase: 'extracting', percent: 5, message: 'Connecting to server...', detail: 'Validating server' });
+          } else if (phase === 'downloading') {
+            const pct = total ? Math.round((downloaded / total) * 90) + 5 : 50;
+            const mb = (downloaded / (1024 * 1024)).toFixed(1);
+            setProgress({ phase: 'extracting', percent: pct, message: 'Downloading graph...', detail: `${mb} MB downloaded` });
+          } else if (phase === 'extracting') {
+            setProgress({ phase: 'extracting', percent: 97, message: 'Processing...', detail: 'Extracting file contents' });
+          }
+        }, undefined, hashRepo);
+      })
+      .then(async (result) => {
+        await handleServerConnect(result);
         setProgress(null);
-      }, ERROR_RESET_DELAY_MS);
-    });
+        setServerBaseUrl(baseUrl);
+
+        // Set repo name in URL hash for refresh persistence
+        const repoName = result.repoInfo?.name ||
+          result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() || '';
+        if (repoName) {
+          window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`);
+        }
+
+        fetchRepos(baseUrl)
+          .then((repos) => setAvailableRepos(repos))
+          .catch((e) => console.warn('Failed to fetch repo list:', e));
+      })
+      .catch(() => {
+        // Server not available — fall through to onboarding (DropZone)
+      });
   }, [handleServerConnect, setProgress, setViewMode, setServerBaseUrl, setAvailableRepos]);
 
   const handleFocusNode = useCallback((nodeId: string) => {
@@ -245,6 +259,14 @@ const AppContent = () => {
           if (serverUrl) {
             const baseUrl = normalizeServerUrl(serverUrl);
             setServerBaseUrl(baseUrl);
+
+            // Set repo name in URL hash for refresh persistence
+            const repoName = result.repoInfo?.name ||
+              result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() || '';
+            if (repoName) {
+              window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`);
+            }
+
             fetchRepos(baseUrl)
               .then((repos) => setAvailableRepos(repos))
               .catch((e) => console.warn('Failed to fetch repo list:', e));
