@@ -3,8 +3,6 @@ import {
   Settings,
   HelpCircle,
   Sparkles,
-  Github,
-  Star,
   FolderOpen,
   ChevronDown,
   Trash2,

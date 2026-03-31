@@ -20,7 +20,6 @@ import {
   type ConnectResult,
   type BackendRepo,
 } from './services/backend-client';
-import { ERROR_RESET_DELAY_MS } from './config/ui-constants';
 
 const AppContent = () => {
   const {
@@ -36,7 +35,6 @@ const AppContent = () => {
     refreshLLMSettings,
     initializeAgent,
     startEmbeddingsWithFallback,
-    embeddingStatus,
     codeReferences,
     selectedNode,
     isCodePanelOpen,
@@ -114,26 +112,54 @@ const AppContent = () => {
     // Probe the server — if it responds, auto-connect
     const baseUrl = normalizeServerUrl(serverUrl);
     fetch(`${baseUrl.replace(/\/api$/, '')}/api/health`)
-      .then(r => { if (!r.ok) throw new Error('not ok'); return r.json(); })
+      .then((r) => {
+        if (!r.ok) throw new Error('not ok');
+        return r.json();
+      })
       .then((health) => {
         if (!health?.status || health.repos === 0) throw new Error('no repos');
         // Abort if user started a local upload while health check was in-flight
         if (localDataLoadedRef.current) throw new Error('local data loaded');
 
-        setProgress({ phase: 'extracting', percent: 0, message: 'Connecting to server...', detail: 'Loading graph from server' });
+        setProgress({
+          phase: 'extracting',
+          percent: 0,
+          message: 'Connecting to server...',
+          detail: 'Loading graph from server',
+        });
         setViewMode('loading');
 
-        return connectToServer(serverUrl, (phase, downloaded, total) => {
-          if (phase === 'validating') {
-            setProgress({ phase: 'extracting', percent: 5, message: 'Connecting to server...', detail: 'Validating server' });
-          } else if (phase === 'downloading') {
-            const pct = total ? Math.round((downloaded / total) * 90) + 5 : 50;
-            const mb = (downloaded / (1024 * 1024)).toFixed(1);
-            setProgress({ phase: 'extracting', percent: pct, message: 'Downloading graph...', detail: `${mb} MB downloaded` });
-          } else if (phase === 'extracting') {
-            setProgress({ phase: 'extracting', percent: 97, message: 'Processing...', detail: 'Extracting file contents' });
-          }
-        }, undefined, hashRepo);
+        return connectToServer(
+          serverUrl,
+          (phase, downloaded, total) => {
+            if (phase === 'validating') {
+              setProgress({
+                phase: 'extracting',
+                percent: 5,
+                message: 'Connecting to server...',
+                detail: 'Validating server',
+              });
+            } else if (phase === 'downloading') {
+              const pct = total ? Math.round((downloaded / total) * 90) + 5 : 50;
+              const mb = (downloaded / (1024 * 1024)).toFixed(1);
+              setProgress({
+                phase: 'extracting',
+                percent: pct,
+                message: 'Downloading graph...',
+                detail: `${mb} MB downloaded`,
+              });
+            } else if (phase === 'extracting') {
+              setProgress({
+                phase: 'extracting',
+                percent: 97,
+                message: 'Processing...',
+                detail: 'Extracting file contents',
+              });
+            }
+          },
+          undefined,
+          hashRepo,
+        );
       })
       .then(async (result) => {
         // Abort if user started a local upload while server data was downloading
@@ -147,10 +173,16 @@ const AppContent = () => {
         setServerBaseUrl(baseUrl);
 
         // Set repo name in URL hash for refresh persistence
-        const repoName = result.repoInfo?.name ||
-          result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() || '';
+        const repoName =
+          result.repoInfo?.name ||
+          result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() ||
+          '';
         if (repoName) {
-          window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`);
+          window.history.replaceState(
+            null,
+            '',
+            `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`,
+          );
         }
 
         fetchRepos()
@@ -206,10 +238,16 @@ const AppContent = () => {
             setServerBaseUrl(baseUrl);
 
             // Set repo name in URL hash for refresh persistence
-            const repoName = result.repoInfo?.name ||
-              result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() || '';
+            const repoName =
+              result.repoInfo?.name ||
+              result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() ||
+              '';
             if (repoName) {
-              window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`);
+              window.history.replaceState(
+                null,
+                '',
+                `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`,
+              );
             }
 
             fetchRepos()
@@ -295,9 +333,9 @@ const AppContent = () => {
 
       {/* Add Repository modal — full DropZone experience in an overlay */}
       {isAddRepoOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm overflow-y-auto">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm">
           <button
-            className="absolute top-4 right-4 p-2 text-text-muted hover:text-text-primary bg-surface rounded-lg border border-border-subtle transition-colors z-10"
+            className="absolute top-4 right-4 z-10 rounded-lg border border-border-subtle bg-surface p-2 text-text-muted transition-colors hover:text-text-primary"
             onClick={() => setAddRepoOpen(false)}
             title="Close"
           >
@@ -311,10 +349,16 @@ const AppContent = () => {
               if (serverUrl) {
                 const baseUrl = normalizeServerUrl(serverUrl);
                 setServerBaseUrl(baseUrl);
-                const repoName = result.repoInfo?.name ||
-                  result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() || '';
+                const repoName =
+                  result.repoInfo?.name ||
+                  result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() ||
+                  '';
                 if (repoName) {
-                  window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`);
+                  window.history.replaceState(
+                    null,
+                    '',
+                    `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`,
+                  );
                 }
                 fetchRepos()
                   .then((repos) => setAvailableRepos(repos))
@@ -324,7 +368,6 @@ const AppContent = () => {
           />
         </div>
       )}
-
     </div>
   );
 };

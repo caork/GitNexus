@@ -10,7 +10,7 @@
  */
 
 import { embedBatch, embedText, embeddingToArray, isEmbedderReady } from './embedder.js';
-import { generateBatchEmbeddingTexts, generateEmbeddingText } from './text-generator.js';
+import { generateBatchEmbeddingTexts } from './text-generator.js';
 import {
   type EmbeddingProgress,
   type EmbeddingConfig,
@@ -166,8 +166,8 @@ export const runEmbeddingPipeline = async (
     if (!isEmbedderReady()) {
       throw new Error(
         'Embedding endpoint not configured. ' +
-        'Set via API: PUT /api/config/embedding {url, model, apiKey, dimensions} ' +
-        'or env: GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL'
+          'Set via API: PUT /api/config/embedding {url, model, apiKey, dimensions} ' +
+          'or env: GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL',
       );
     }
 

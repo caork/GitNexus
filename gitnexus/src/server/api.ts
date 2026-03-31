@@ -12,28 +12,25 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
-import { fork, spawn, type ChildProcess } from 'child_process';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { spawn, type ChildProcess } from 'child_process';
 import { createRequire } from 'node:module';
-import { loadMeta, listRegisteredRepos, loadCLIConfig, saveCLIConfig, getStoragePath } from '../storage/repo-manager.js';
 import {
-  executeQuery,
-  executePrepared,
-  executeWithReusedStatement,
-  closeLbug,
-  withLbugDb,
-} from '../core/lbug/lbug-adapter.js';
+  loadMeta,
+  listRegisteredRepos,
+  loadCLIConfig,
+  saveCLIConfig,
+  getStoragePath,
+} from '../storage/repo-manager.js';
+import { executeQuery, executePrepared, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
 import { isWriteQuery } from '../mcp/core/lbug-adapter.js';
 import { NODE_TABLES, type GraphNode, type GraphRelationship } from 'gitnexus-shared';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
 import { hybridSearch } from '../core/search/hybrid-search.js';
 // Embedding imports are lazy (dynamic import) — only needed when HTTP endpoint is configured
 import { LocalBackend } from '../mcp/local/local-backend.js';
-import type { Backend } from '../mcp/backend.js';
 import { readResource } from '../mcp/resources.js';
 import { mountMCPEndpoints } from './mcp-http.js';
 import { JobManager } from './analyze-job.js';
-import { extractRepoName, getCloneDir, cloneOrPull } from './git-clone.js';
 
 const _require = createRequire(import.meta.url);
 const pkg = _require('../../package.json') as { version: string };
@@ -114,7 +111,7 @@ export const isAllowedOrigin = (origin: string | undefined): boolean => {
 const SNAPSHOT_FILE = 'graph-snapshot.json';
 
 interface GraphSnapshot {
-  indexedAt: string;   // tracks freshness — compared against meta.json
+  indexedAt: string; // tracks freshness — compared against meta.json
   nodes: GraphNode[];
   relationships: GraphRelationship[];
 }
@@ -144,11 +141,15 @@ const writeSnapshot = async (storagePath: string, snap: GraphSnapshot): Promise<
 const deleteSnapshot = async (storagePath: string): Promise<void> => {
   try {
     await fs.unlink(path.join(storagePath, SNAPSHOT_FILE));
-  } catch { /* file may not exist */ }
+  } catch {
+    /* file may not exist */
+  }
 };
 
 /** Build graph and cache it, or return from cache if fresh. */
-const getGraphCached = async (storagePath: string): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
+const getGraphCached = async (
+  storagePath: string,
+): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
   // Try cache first
   const cached = await readSnapshot(storagePath);
   if (cached) return { nodes: cached.nodes, relationships: cached.relationships };
@@ -180,7 +181,9 @@ const warmSnapshotCaches = async (): Promise<void> => {
         if (meta) {
           await writeSnapshot(repo.storagePath, { indexedAt: meta.indexedAt, ...graph });
         }
-        console.log(`  Cached ${repo.name}: ${graph.nodes.length} nodes, ${graph.relationships.length} edges`);
+        console.log(
+          `  Cached ${repo.name}: ${graph.nodes.length} nodes, ${graph.relationships.length} edges`,
+        );
       } else {
         console.log(`  Snapshot cache fresh for ${repo.name}`);
       }
@@ -190,7 +193,9 @@ const warmSnapshotCaches = async (): Promise<void> => {
   }
 };
 
-const buildGraph = async (includeContent = false): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
+const buildGraph = async (
+  includeContent = false,
+): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
   const nodes: GraphNode[] = [];
   for (const table of NODE_TABLES) {
     try {
@@ -213,7 +218,6 @@ const buildGraph = async (includeContent = false): Promise<{ nodes: GraphNode[];
 
       const rows = await executeQuery(query);
       for (const row of rows) {
-
         nodes.push({
           id: row.id ?? row[0],
           label: table as GraphNode['label'],
@@ -377,14 +381,16 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   // When the built web UI exists alongside the server package, serve it here.
   // The web UI needs Cross-Origin Isolation headers for SharedArrayBuffer (WASM).
   const serverDir = path.dirname(new URL(import.meta.url).pathname);
-  const webDistDir = process.env.GITNEXUS_WEB_DIR
-    ?? path.resolve(serverDir, '../../../gitnexus-web/dist');
+  const webDistDir =
+    process.env.GITNEXUS_WEB_DIR ?? path.resolve(serverDir, '../../../gitnexus-web/dist');
 
   let serveStatic = false;
   try {
     await fs.access(path.join(webDistDir, 'index.html'));
     serveStatic = true;
-  } catch { /* web UI not built — skip */ }
+  } catch {
+    /* web UI not built — skip */
+  }
 
   if (serveStatic) {
     // Required headers for SharedArrayBuffer (used by LadybugDB WASM worker)
@@ -963,22 +969,30 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       res.json({
         version: schema.version,
         name: schema.name,
-        interfaces: schema.interfaces.map(i => ({
-          apiName: i.apiName, displayName: i.displayName, extends: i.extends,
-          properties: i.properties.map(p => p.apiName),
+        interfaces: schema.interfaces.map((i) => ({
+          apiName: i.apiName,
+          displayName: i.displayName,
+          extends: i.extends,
+          properties: i.properties.map((p) => p.apiName),
         })),
-        objectTypes: schema.objectTypes.map(ot => ({
-          apiName: ot.apiName, displayName: ot.displayName,
-          interfaces: ot.interfaces, status: ot.status,
+        objectTypes: schema.objectTypes.map((ot) => ({
+          apiName: ot.apiName,
+          displayName: ot.displayName,
+          interfaces: ot.interfaces,
+          status: ot.status,
           sourceLabels: ot.sourceLabels,
         })),
-        linkTypes: schema.linkTypes.map(lt => ({
-          apiName: lt.apiName, displayName: lt.displayName,
-          sourceType: lt.sourceType, targetType: lt.targetType,
-          cardinality: lt.cardinality, status: lt.status,
+        linkTypes: schema.linkTypes.map((lt) => ({
+          apiName: lt.apiName,
+          displayName: lt.displayName,
+          sourceType: lt.sourceType,
+          targetType: lt.targetType,
+          cardinality: lt.cardinality,
+          status: lt.status,
         })),
-        sharedProperties: schema.sharedProperties.map(sp => ({
-          apiName: sp.apiName, baseType: sp.baseType,
+        sharedProperties: schema.sharedProperties.map((sp) => ({
+          apiName: sp.apiName,
+          baseType: sp.baseType,
         })),
       });
     } catch (err: any) {
@@ -991,12 +1005,19 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     try {
       const schema = req.body;
       if (!schema?.version || !schema?.objectTypes || !schema?.linkTypes) {
-        res.status(400).json({ error: 'Invalid schema: must have version, objectTypes, linkTypes' });
+        res
+          .status(400)
+          .json({ error: 'Invalid schema: must have version, objectTypes, linkTypes' });
         return;
       }
       const { saveOntology } = await import('../core/ontology/ontology-manager.js');
       await saveOntology(schema);
-      res.json({ status: 'ok', version: schema.version, objectTypes: schema.objectTypes.length, linkTypes: schema.linkTypes.length });
+      res.json({
+        status: 'ok',
+        version: schema.version,
+        objectTypes: schema.objectTypes.length,
+        linkTypes: schema.linkTypes.length,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1016,7 +1037,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   // GET resolve a NodeLabel to its Object Type
   app.get('/api/ontology/resolve', async (req, res) => {
     try {
-      const { loadOntology, resolveObjectType, resolveLinkType, getInterfacesForType } = await import('../core/ontology/ontology-manager.js');
+      const { loadOntology, resolveObjectType, resolveLinkType, getInterfacesForType } =
+        await import('../core/ontology/ontology-manager.js');
       const schema = await loadOntology();
       const nodeLabel = req.query.nodeLabel as string | undefined;
       const relType = req.query.relType as string | undefined;
@@ -1084,11 +1106,19 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       await saveCLIConfig(config);
 
       // Apply in-memory so subsequent embed calls use the new config immediately
-      const { setEmbeddingConfig, warmConfigCache } = await import('../core/embeddings/http-client.js');
+      const { setEmbeddingConfig, warmConfigCache } =
+        await import('../core/embeddings/http-client.js');
       setEmbeddingConfig(config.embedding);
       await warmConfigCache();
 
-      res.json({ status: 'ok', embedding: { url: config.embedding.url, model: config.embedding.model, dimensions: config.embedding.dimensions } });
+      res.json({
+        status: 'ok',
+        embedding: {
+          url: config.embedding.url,
+          model: config.embedding.model,
+          dimensions: config.embedding.dimensions,
+        },
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1121,13 +1151,19 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
 
       // Temporarily apply config for the test
       const { setEmbeddingConfig } = await import('../core/embeddings/http-client.js');
-      const prevOverride = await import('../core/embeddings/http-client.js').then(m => m.getActiveEmbeddingConfig());
+      const prevOverride = await import('../core/embeddings/http-client.js').then((m) =>
+        m.getActiveEmbeddingConfig(),
+      );
       setEmbeddingConfig({ url, model, apiKey, dimensions });
 
       try {
         const { httpEmbedQuery } = await import('../core/embeddings/http-client.js');
         const vec = await httpEmbedQuery('test connection');
-        res.json({ status: 'ok', dimensions: vec.length, message: `Embedding endpoint returned ${vec.length}-dimensional vector` });
+        res.json({
+          status: 'ok',
+          dimensions: vec.length,
+          message: `Embedding endpoint returned ${vec.length}-dimensional vector`,
+        });
       } catch (testErr: any) {
         res.status(400).json({ status: 'error', error: testErr.message });
       } finally {
@@ -1184,7 +1220,10 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       const repo = await backend.resolveRepo(req.body?.repoName);
       const repoId = repo.name.toLowerCase();
       const context = backend.getContext(repoId) || backend.getContext();
-      res.json({ context, repo: { name: repo.name, repoPath: repo.repoPath, lastCommit: repo.lastCommit } });
+      res.json({
+        context,
+        repo: { name: repo.name, repoPath: repo.repoPath, lastCommit: repo.lastCommit },
+      });
     } catch (err: any) {
       res.status(statusFromError(err)).json({ error: err.message });
     }
@@ -1232,18 +1271,20 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   app.get('/api/graphs', async (_req, res) => {
     try {
       const repos = await listRegisteredRepos();
-      const graphs = await Promise.all(repos.map(async (repo) => {
-        const snap = await readSnapshot(repo.storagePath);
-        const meta = await loadMeta(repo.storagePath);
-        return {
-          name: repo.name,
-          path: repo.path,
-          indexedAt: meta?.indexedAt ?? repo.indexedAt,
-          stats: meta?.stats ?? repo.stats ?? {},
-          cached: !!snap,
-          cacheStale: snap ? snap.indexedAt !== meta?.indexedAt : false,
-        };
-      }));
+      const graphs = await Promise.all(
+        repos.map(async (repo) => {
+          const snap = await readSnapshot(repo.storagePath);
+          const meta = await loadMeta(repo.storagePath);
+          return {
+            name: repo.name,
+            path: repo.path,
+            indexedAt: meta?.indexedAt ?? repo.indexedAt,
+            stats: meta?.stats ?? repo.stats ?? {},
+            cached: !!snap,
+            cacheStale: snap ? snap.indexedAt !== meta?.indexedAt : false,
+          };
+        }),
+      );
       res.json({ graphs });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1254,8 +1295,11 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   app.post('/api/graphs/:name/cache', async (req, res) => {
     try {
       const repos = await listRegisteredRepos();
-      const repo = repos.find(r => r.name === req.params.name);
-      if (!repo) { res.status(404).json({ error: 'Repository not found' }); return; }
+      const repo = repos.find((r) => r.name === req.params.name);
+      if (!repo) {
+        res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
 
       const lbugPath = path.join(repo.storagePath, 'lbug');
       const graph = await withLbugDb(lbugPath, async () => buildGraph());
@@ -1263,7 +1307,11 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       if (meta) {
         await writeSnapshot(repo.storagePath, { indexedAt: meta.indexedAt, ...graph });
       }
-      res.json({ status: 'ok', nodes: graph.nodes.length, relationships: graph.relationships.length });
+      res.json({
+        status: 'ok',
+        nodes: graph.nodes.length,
+        relationships: graph.relationships.length,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1273,8 +1321,11 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   app.delete('/api/graphs/:name/cache', async (req, res) => {
     try {
       const repos = await listRegisteredRepos();
-      const repo = repos.find(r => r.name === req.params.name);
-      if (!repo) { res.status(404).json({ error: 'Repository not found' }); return; }
+      const repo = repos.find((r) => r.name === req.params.name);
+      if (!repo) {
+        res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
 
       await deleteSnapshot(repo.storagePath);
       res.json({ status: 'ok' });
@@ -1410,7 +1461,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         try {
           const repos = await listRegisteredRepos();
           const repoName = path.basename(repoPath);
-          const repo = repos.find(r => r.name === repoName || r.path === repoPath);
+          const repo = repos.find((r) => r.name === repoName || r.path === repoPath);
           if (repo) {
             const lbugPath = path.join(repo.storagePath, 'lbug');
             const graph = await withLbugDb(lbugPath, async () => buildGraph());

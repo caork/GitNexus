@@ -36,7 +36,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     openCodePanel,
     depthFilter,
     highlightedNodeIds,
-    setHighlightedNodeIds,
+    setHighlightedNodeIds: _setHighlightedNodeIds,
     aiCitationHighlightedNodeIds,
     aiToolHighlightedNodeIds,
     blastRadiusNodeIds,
@@ -263,9 +263,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
           <span className="font-mono text-sm text-text-primary">
             {appSelectedNode.properties.name}
           </span>
-          <span className="text-xs text-text-muted">
-            ({appSelectedNode.label})
-          </span>
+          <span className="text-xs text-text-muted">({appSelectedNode.label})</span>
           <button
             onClick={handleClearSelection}
             className="ml-2 rounded px-2 py-0.5 text-xs text-text-secondary transition-colors hover:bg-white/10 hover:text-text-primary"
