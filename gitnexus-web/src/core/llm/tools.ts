@@ -206,12 +206,22 @@ export const createGraphRAGTools = (backend: GraphRAGBackend) => {
       name: 'search',
       description:
         'Search for code by keywords or concepts. Combines keyword matching and semantic understanding. Groups results by process with cluster context.',
-      schema: z.object({
-        query: z.preprocess((v) => v == null ? '' : String(v), z.string()).describe('What you are looking for (e.g., "authentication middleware", "database connection")'),
-        groupByProcess: z.boolean().optional().nullable().describe('Group results by process (default: true)'),
-        limit: z.number().optional().nullable().describe('Max results to return (default: 10)'),
-      }).passthrough(),
-    }
+      schema: z
+        .object({
+          query: z
+            .preprocess((v) => (v == null ? '' : String(v)), z.string())
+            .describe(
+              'What you are looking for (e.g., "authentication middleware", "database connection")',
+            ),
+          groupByProcess: z
+            .boolean()
+            .optional()
+            .nullable()
+            .describe('Group results by process (default: true)'),
+          limit: z.number().optional().nullable().describe('Max results to return (default: 10)'),
+        })
+        .passthrough(),
+    },
   );
 
   // ============================================================================
@@ -312,11 +322,21 @@ For semantic+graph queries, include {{QUERY_VECTOR}} placeholder and provide a '
 CALL QUERY_VECTOR_INDEX('CodeEmbedding', 'code_embedding_idx', {{QUERY_VECTOR}}, 10) YIELD node AS emb, distance
 WITH emb, distance WHERE distance < 0.5
 MATCH (n:Function {id: emb.nodeId}) RETURN n`,
-      schema: z.object({
-        cypher: z.preprocess((v) => v == null ? '' : String(v), z.string()).describe('The Cypher query to execute'),
-        query: z.string().optional().nullable().describe('Natural language query to embed (required if cypher contains {{QUERY_VECTOR}})'),
-      }).passthrough(),
-    }
+      schema: z
+        .object({
+          cypher: z
+            .preprocess((v) => (v == null ? '' : String(v)), z.string())
+            .describe('The Cypher query to execute'),
+          query: z
+            .string()
+            .optional()
+            .nullable()
+            .describe(
+              'Natural language query to embed (required if cypher contains {{QUERY_VECTOR}})',
+            ),
+        })
+        .passthrough(),
+    },
   );
 
   // ============================================================================
@@ -366,13 +386,25 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
       name: 'grep',
       description:
         'Search for exact text patterns across all files using regex. Use for finding specific strings, error messages, TODOs, variable names, etc.',
-      schema: z.object({
-        pattern: z.preprocess((v) => v == null ? '' : String(v), z.string()).describe('Regex pattern to search for (e.g., "TODO", "console\\.log", "API_KEY")'),
-        fileFilter: z.string().optional().nullable().describe('Only search files containing this string (e.g., ".ts", "src/api")'),
-        caseSensitive: z.boolean().optional().nullable().describe('Case-sensitive search (default: false)'),
-        maxResults: z.number().optional().nullable().describe('Max results (default: 100)'),
-      }).passthrough(),
-    }
+      schema: z
+        .object({
+          pattern: z
+            .preprocess((v) => (v == null ? '' : String(v)), z.string())
+            .describe('Regex pattern to search for (e.g., "TODO", "console\\.log", "API_KEY")'),
+          fileFilter: z
+            .string()
+            .optional()
+            .nullable()
+            .describe('Only search files containing this string (e.g., ".ts", "src/api")'),
+          caseSensitive: z
+            .boolean()
+            .optional()
+            .nullable()
+            .describe('Case-sensitive search (default: false)'),
+          maxResults: z.number().optional().nullable().describe('Max results (default: 100)'),
+        })
+        .passthrough(),
+    },
   );
 
   // ============================================================================
@@ -405,10 +437,14 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
       name: 'read',
       description:
         'Read the full content of a file. Use to see source code after finding files via search or grep.',
-      schema: z.object({
-        filePath: z.preprocess((v) => v == null ? '' : String(v), z.string()).describe('File path to read (can be partial like "src/utils.ts")'),
-      }).passthrough(),
-    }
+      schema: z
+        .object({
+          filePath: z
+            .preprocess((v) => (v == null ? '' : String(v)), z.string())
+            .describe('File path to read (can be partial like "src/utils.ts")'),
+        })
+        .passthrough(),
+    },
   );
 
   // ============================================================================
@@ -508,9 +544,10 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
     },
     {
       name: 'overview',
-      description: 'Codebase map showing all clusters and processes, plus cross-cluster dependencies.',
+      description:
+        'Codebase map showing all clusters and processes, plus cross-cluster dependencies.',
       schema: z.object({}).passthrough(),
-    }
+    },
   );
 
   // ============================================================================
@@ -773,11 +810,19 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
       name: 'explore',
       description:
         'Deep dive on a symbol, cluster, or process. Shows membership, participation, and connections.',
-      schema: z.object({
-        target: z.preprocess((v) => v == null ? '' : String(v), z.string()).describe('Name or ID of a symbol, cluster, or process'),
-        type: z.enum(['symbol', 'cluster', 'process']).optional().nullable().describe('Optional target type (auto-detected if omitted)'),
-      }).passthrough(),
-    }
+      schema: z
+        .object({
+          target: z
+            .preprocess((v) => (v == null ? '' : String(v)), z.string())
+            .describe('Name or ID of a symbol, cluster, or process'),
+          type: z
+            .enum(['symbol', 'cluster', 'process'])
+            .optional()
+            .nullable()
+            .describe('Optional target type (auto-detected if omitted)'),
+        })
+        .passthrough(),
+    },
   );
 
   // ============================================================================
@@ -1414,15 +1459,47 @@ Additional output sections:
 - Affected processes (with step impact)
 - Affected clusters (direct/indirect)
 - Risk summary (based on direct callers, processes, clusters)`,
-      schema: z.object({
-        target: z.preprocess((v) => v == null ? '' : String(v), z.string()).describe('Name of the function, class, or file to analyze'),
-        direction: z.preprocess((v) => v == null ? 'upstream' : String(v), z.enum(['upstream', 'downstream'])).catch('upstream').describe('upstream = what depends on this; downstream = what this depends on'),
-        maxDepth: z.number().optional().nullable().describe('Max traversal depth (default: 3, max: 10)'),
-        relationTypes: z.array(z.string()).optional().nullable().describe('Filter by relation types: CALLS, IMPORTS, EXTENDS, IMPLEMENTS, CONTAINS, DEFINES (default: usage-based)'),
-        includeTests: z.boolean().optional().nullable().describe('Include test files in results (default: false, excludes .test.ts, .spec.ts, __tests__)'),
-        minConfidence: z.number().optional().nullable().describe('Minimum edge confidence 0-1 (default: 0.7, excludes fuzzy/inferred matches)'),
-      }).passthrough(),
-    }
+      schema: z
+        .object({
+          target: z
+            .preprocess((v) => (v == null ? '' : String(v)), z.string())
+            .describe('Name of the function, class, or file to analyze'),
+          direction: z
+            .preprocess(
+              (v) => (v == null ? 'upstream' : String(v)),
+              z.enum(['upstream', 'downstream']),
+            )
+            .catch('upstream')
+            .describe('upstream = what depends on this; downstream = what this depends on'),
+          maxDepth: z
+            .number()
+            .optional()
+            .nullable()
+            .describe('Max traversal depth (default: 3, max: 10)'),
+          relationTypes: z
+            .array(z.string())
+            .optional()
+            .nullable()
+            .describe(
+              'Filter by relation types: CALLS, IMPORTS, EXTENDS, IMPLEMENTS, CONTAINS, DEFINES (default: usage-based)',
+            ),
+          includeTests: z
+            .boolean()
+            .optional()
+            .nullable()
+            .describe(
+              'Include test files in results (default: false, excludes .test.ts, .spec.ts, __tests__)',
+            ),
+          minConfidence: z
+            .number()
+            .optional()
+            .nullable()
+            .describe(
+              'Minimum edge confidence 0-1 (default: 0.7, excludes fuzzy/inferred matches)',
+            ),
+        })
+        .passthrough(),
+    },
   );
 
   // ============================================================================

@@ -40,7 +40,9 @@ export interface Backend {
   listRepos(): Promise<RepoInfo[]>;
 
   /** Resolve a repo by name (or return the default) */
-  resolveRepo(repoName?: string): Promise<{ name: string; repoPath: string; lastCommit: string; [key: string]: any }>;
+  resolveRepo(
+    repoName?: string,
+  ): Promise<{ name: string; repoPath: string; lastCommit: string; [key: string]: any }>;
 
   /** Get cached codebase context (may return null if not loaded) */
   getContext(repoId?: string): CodebaseContext | null;

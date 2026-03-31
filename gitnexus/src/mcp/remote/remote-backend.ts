@@ -37,7 +37,11 @@ export class RemoteBackend implements Backend {
     // Pre-cache context for each repo
     for (const repo of this.cachedRepos) {
       try {
-        const info = await this.fetchJSON<{ context: CodebaseContext | null }>('POST', '/api/internal/context-info', { repoName: repo.name });
+        const info = await this.fetchJSON<{ context: CodebaseContext | null }>(
+          'POST',
+          '/api/internal/context-info',
+          { repoName: repo.name },
+        );
         if (info.context) {
           this.cachedContexts.set(repo.name.toLowerCase(), info.context);
         }
@@ -58,7 +62,12 @@ export class RemoteBackend implements Backend {
   async callTool(method: string, params: any): Promise<any> {
     // analyze can take minutes — use a longer timeout
     const timeout = method === 'analyze' ? 600_000 : undefined;
-    const data = await this.fetchJSON<{ result: any }>('POST', `/api/tools/${encodeURIComponent(method)}`, params ?? {}, timeout);
+    const data = await this.fetchJSON<{ result: any }>(
+      'POST',
+      `/api/tools/${encodeURIComponent(method)}`,
+      params ?? {},
+      timeout,
+    );
     return data.result;
   }
 
@@ -69,18 +78,26 @@ export class RemoteBackend implements Backend {
     return this.cachedRepos;
   }
 
-  async resolveRepo(repoName?: string): Promise<{ name: string; repoPath: string; lastCommit: string; [key: string]: any }> {
+  async resolveRepo(
+    repoName?: string,
+  ): Promise<{ name: string; repoPath: string; lastCommit: string; [key: string]: any }> {
     if (this.cachedRepos.length === 0) {
       await this.listRepos();
     }
 
     let repo: RepoInfo | undefined;
     if (repoName) {
-      repo = this.cachedRepos.find(r => r.name === repoName || r.name.toLowerCase() === repoName.toLowerCase());
+      repo = this.cachedRepos.find(
+        (r) => r.name === repoName || r.name.toLowerCase() === repoName.toLowerCase(),
+      );
       if (!repo) throw new Error(`Repository "${repoName}" not found on remote service`);
     } else {
-      if (this.cachedRepos.length === 0) throw new Error('No indexed repositories on remote service');
-      if (this.cachedRepos.length > 1) throw new Error(`Multiple repositories indexed. Specify one: ${this.cachedRepos.map(r => r.name).join(', ')}`);
+      if (this.cachedRepos.length === 0)
+        throw new Error('No indexed repositories on remote service');
+      if (this.cachedRepos.length > 1)
+        throw new Error(
+          `Multiple repositories indexed. Specify one: ${this.cachedRepos.map((r) => r.name).join(', ')}`,
+        );
       repo = this.cachedRepos[0];
     }
 
@@ -124,7 +141,12 @@ export class RemoteBackend implements Backend {
 
   // ─── HTTP helper ──────────────────────────────────────────────────
 
-  private async fetchJSON<T>(method: 'GET' | 'POST', path: string, body?: any, timeoutMs?: number): Promise<T> {
+  private async fetchJSON<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: any,
+    timeoutMs?: number,
+  ): Promise<T> {
     const url = `${this.serverUrl}${path}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs ?? REQUEST_TIMEOUT_MS);
@@ -153,13 +175,17 @@ export class RemoteBackend implements Backend {
         throw new Error(errorMsg);
       }
 
-      return await res.json() as T;
+      return (await res.json()) as T;
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        throw new Error(`Request to GitNexus service timed out (${REQUEST_TIMEOUT_MS / 1000}s): ${method} ${path}`);
+        throw new Error(
+          `Request to GitNexus service timed out (${REQUEST_TIMEOUT_MS / 1000}s): ${method} ${path}`,
+        );
       }
       if (err.cause?.code === 'ECONNREFUSED') {
-        throw new Error(`Cannot connect to GitNexus service at ${this.serverUrl}. Is it running? Start with: gitnexus serve --host 0.0.0.0`);
+        throw new Error(
+          `Cannot connect to GitNexus service at ${this.serverUrl}. Is it running? Start with: gitnexus serve --host 0.0.0.0`,
+        );
       }
       throw err;
     } finally {

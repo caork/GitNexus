@@ -1,5 +1,19 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { X, Key, Server, Brain, Check, AlertCircle, Eye, EyeOff, RefreshCw, ChevronDown, Loader2, Search, Cpu } from '@/lib/lucide-icons';
+import {
+  X,
+  Key,
+  Server,
+  Brain,
+  Check,
+  AlertCircle,
+  Eye,
+  EyeOff,
+  RefreshCw,
+  ChevronDown,
+  Loader2,
+  Search,
+  Cpu,
+} from '@/lib/lucide-icons';
 import {
   loadSettings,
   saveSettings,
@@ -254,9 +268,13 @@ export const SettingsPanel = ({
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   // Embedding config state
   const [embeddingConfig, setEmbeddingConfig] = useState<EmbeddingConfig>({ url: '', model: '' });
-  const [embeddingTestStatus, setEmbeddingTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+  const [embeddingTestStatus, setEmbeddingTestStatus] = useState<
+    'idle' | 'testing' | 'ok' | 'error'
+  >('idle');
   const [embeddingTestMsg, setEmbeddingTestMsg] = useState('');
-  const [embeddingSaveStatus, setEmbeddingSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+  const [embeddingSaveStatus, setEmbeddingSaveStatus] = useState<'idle' | 'saved' | 'error'>(
+    'idle',
+  );
   const [showEmbeddingKey, setShowEmbeddingKey] = useState(false);
 
   // Clean up save timer on unmount
@@ -299,13 +317,13 @@ export const SettingsPanel = ({
   useEffect(() => {
     if (!isOpen) return;
     fetch('/api/config/embedding')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
         if (data?.configured) {
           setEmbeddingConfig({
             url: data.url ?? '',
             model: data.model ?? '',
-            apiKey: '',  // masked server-side, don't show
+            apiKey: '', // masked server-side, don't show
             dimensions: data.dimensions,
           });
         }
@@ -315,7 +333,10 @@ export const SettingsPanel = ({
 
   const handleEmbeddingSave = useCallback(async () => {
     try {
-      const body: Record<string, unknown> = { url: embeddingConfig.url, model: embeddingConfig.model };
+      const body: Record<string, unknown> = {
+        url: embeddingConfig.url,
+        model: embeddingConfig.model,
+      };
       if (embeddingConfig.apiKey) body.apiKey = embeddingConfig.apiKey;
       if (embeddingConfig.dimensions) body.dimensions = embeddingConfig.dimensions;
       const r = await fetch('/api/config/embedding', {
@@ -334,7 +355,10 @@ export const SettingsPanel = ({
     setEmbeddingTestStatus('testing');
     setEmbeddingTestMsg('');
     try {
-      const body: Record<string, unknown> = { url: embeddingConfig.url, model: embeddingConfig.model };
+      const body: Record<string, unknown> = {
+        url: embeddingConfig.url,
+        model: embeddingConfig.model,
+      };
       if (embeddingConfig.apiKey) body.apiKey = embeddingConfig.apiKey;
       if (embeddingConfig.dimensions) body.dimensions = embeddingConfig.dimensions;
       const r = await fetch('/api/config/embedding/test', {
@@ -990,27 +1014,32 @@ export const SettingsPanel = ({
 
           {/* Embedding Provider */}
           <div className="space-y-4">
-            <div className="flex items-center gap-2 pb-1 border-b border-border-subtle">
-              <Cpu className="w-4 h-4 text-text-muted" />
+            <div className="flex items-center gap-2 border-b border-border-subtle pb-1">
+              <Cpu className="h-4 w-4 text-text-muted" />
               <span className="text-sm font-medium text-text-secondary">Embedding Provider</span>
-              <span className="text-xs text-text-muted">(used by gitnexus analyze --embeddings)</span>
+              <span className="text-xs text-text-muted">
+                (used by gitnexus analyze --embeddings)
+              </span>
             </div>
 
             {/* Endpoint URL */}
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-sm font-medium text-text-secondary">
-                <Server className="w-4 h-4" />
+                <Server className="h-4 w-4" />
                 Endpoint URL
               </label>
               <input
                 type="url"
                 value={embeddingConfig.url}
-                onChange={e => setEmbeddingConfig(prev => ({ ...prev, url: e.target.value }))}
+                onChange={(e) => setEmbeddingConfig((prev) => ({ ...prev, url: e.target.value }))}
                 placeholder="http://localhost:11434/v1/embeddings"
-                className="w-full px-4 py-3 bg-elevated border border-border-subtle rounded-xl text-text-primary placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none transition-all font-mono text-sm"
+                className="w-full rounded-xl border border-border-subtle bg-elevated px-4 py-3 font-mono text-sm text-text-primary transition-all outline-none placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20"
               />
               <p className="text-xs text-text-muted">
-                OpenAI-compatible embeddings endpoint. For Ollama: <code className="px-1 py-0.5 bg-elevated rounded">http://localhost:11434/v1/embeddings</code>
+                OpenAI-compatible embeddings endpoint. For Ollama:{' '}
+                <code className="rounded bg-elevated px-1 py-0.5">
+                  http://localhost:11434/v1/embeddings
+                </code>
               </p>
             </div>
 
@@ -1020,32 +1049,34 @@ export const SettingsPanel = ({
               <input
                 type="text"
                 value={embeddingConfig.model}
-                onChange={e => setEmbeddingConfig(prev => ({ ...prev, model: e.target.value }))}
+                onChange={(e) => setEmbeddingConfig((prev) => ({ ...prev, model: e.target.value }))}
                 placeholder="e.g., nomic-embed-text, text-embedding-3-small"
-                className="w-full px-4 py-3 bg-elevated border border-border-subtle rounded-xl text-text-primary placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none transition-all font-mono text-sm"
+                className="w-full rounded-xl border border-border-subtle bg-elevated px-4 py-3 font-mono text-sm text-text-primary transition-all outline-none placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20"
               />
             </div>
 
             {/* API Key */}
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-sm font-medium text-text-secondary">
-                <Key className="w-4 h-4" />
-                API Key <span className="text-text-muted font-normal">(optional)</span>
+                <Key className="h-4 w-4" />
+                API Key <span className="font-normal text-text-muted">(optional)</span>
               </label>
               <div className="relative">
                 <input
                   type={showEmbeddingKey ? 'text' : 'password'}
                   value={embeddingConfig.apiKey ?? ''}
-                  onChange={e => setEmbeddingConfig(prev => ({ ...prev, apiKey: e.target.value }))}
+                  onChange={(e) =>
+                    setEmbeddingConfig((prev) => ({ ...prev, apiKey: e.target.value }))
+                  }
                   placeholder="Leave empty for local providers like Ollama"
-                  className="w-full px-4 py-3 pr-12 bg-elevated border border-border-subtle rounded-xl text-text-primary placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none transition-all"
+                  className="w-full rounded-xl border border-border-subtle bg-elevated px-4 py-3 pr-12 text-text-primary transition-all outline-none placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20"
                 />
                 <button
                   type="button"
-                  onClick={() => setShowEmbeddingKey(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-primary transition-colors"
+                  onClick={() => setShowEmbeddingKey((v) => !v)}
+                  className="absolute top-1/2 right-3 -translate-y-1/2 p-1 text-text-muted transition-colors hover:text-text-primary"
                 >
-                  {showEmbeddingKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showEmbeddingKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </div>
@@ -1053,17 +1084,19 @@ export const SettingsPanel = ({
             {/* Dimensions */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-text-secondary">
-                Dimensions <span className="text-text-muted font-normal">(optional)</span>
+                Dimensions <span className="font-normal text-text-muted">(optional)</span>
               </label>
               <input
                 type="number"
                 value={embeddingConfig.dimensions ?? ''}
-                onChange={e => setEmbeddingConfig(prev => ({
-                  ...prev,
-                  dimensions: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                }))}
+                onChange={(e) =>
+                  setEmbeddingConfig((prev) => ({
+                    ...prev,
+                    dimensions: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                  }))
+                }
                 placeholder="e.g., 768, 1536 — leave empty to auto-detect"
-                className="w-full px-4 py-3 bg-elevated border border-border-subtle rounded-xl text-text-primary placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none transition-all font-mono text-sm"
+                className="w-full rounded-xl border border-border-subtle bg-elevated px-4 py-3 font-mono text-sm text-text-primary transition-all outline-none placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20"
               />
             </div>
 
@@ -1071,37 +1104,55 @@ export const SettingsPanel = ({
             <div className="flex items-center gap-3">
               <button
                 onClick={handleEmbeddingTest}
-                disabled={embeddingTestStatus === 'testing' || !embeddingConfig.url || !embeddingConfig.model}
-                className="px-4 py-2 text-sm border border-border-subtle bg-elevated text-text-secondary hover:text-text-primary hover:border-accent/50 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                disabled={
+                  embeddingTestStatus === 'testing' ||
+                  !embeddingConfig.url ||
+                  !embeddingConfig.model
+                }
+                className="flex items-center gap-2 rounded-lg border border-border-subtle bg-elevated px-4 py-2 text-sm text-text-secondary transition-colors hover:border-accent/50 hover:text-text-primary disabled:opacity-50"
               >
                 {embeddingTestStatus === 'testing' ? (
-                  <><RefreshCw className="w-3 h-3 animate-spin" /> Testing…</>
-                ) : 'Test Connection'}
+                  <>
+                    <RefreshCw className="h-3 w-3 animate-spin" /> Testing…
+                  </>
+                ) : (
+                  'Test Connection'
+                )}
               </button>
 
               <button
                 onClick={handleEmbeddingSave}
                 disabled={!embeddingConfig.url || !embeddingConfig.model}
-                className="px-4 py-2 text-sm bg-accent/80 hover:bg-accent text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                className="flex items-center gap-2 rounded-lg bg-accent/80 px-4 py-2 text-sm text-white transition-colors hover:bg-accent disabled:opacity-50"
               >
                 {embeddingSaveStatus === 'saved' ? (
-                  <><Check className="w-3 h-3" /> Saved</>
+                  <>
+                    <Check className="h-3 w-3" /> Saved
+                  </>
                 ) : embeddingSaveStatus === 'error' ? (
-                  <><AlertCircle className="w-3 h-3" /> Error</>
-                ) : 'Save Embedding Config'}
+                  <>
+                    <AlertCircle className="h-3 w-3" /> Error
+                  </>
+                ) : (
+                  'Save Embedding Config'
+                )}
               </button>
             </div>
 
             {/* Test result message */}
             {embeddingTestMsg && (
-              <div className={`p-2 rounded-lg text-xs flex items-center gap-1.5 ${
-                embeddingTestStatus === 'ok'
-                  ? 'bg-green-500/10 border border-green-500/30 text-green-400'
-                  : 'bg-red-500/10 border border-red-500/30 text-red-400'
-              }`}>
-                {embeddingTestStatus === 'ok'
-                  ? <Check className="w-3 h-3 flex-shrink-0" />
-                  : <AlertCircle className="w-3 h-3 flex-shrink-0" />}
+              <div
+                className={`flex items-center gap-1.5 rounded-lg p-2 text-xs ${
+                  embeddingTestStatus === 'ok'
+                    ? 'border border-green-500/30 bg-green-500/10 text-green-400'
+                    : 'border border-red-500/30 bg-red-500/10 text-red-400'
+                }`}
+              >
+                {embeddingTestStatus === 'ok' ? (
+                  <Check className="h-3 w-3 flex-shrink-0" />
+                ) : (
+                  <AlertCircle className="h-3 w-3 flex-shrink-0" />
+                )}
                 {embeddingTestMsg}
               </div>
             )}

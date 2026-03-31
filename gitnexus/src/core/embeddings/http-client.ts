@@ -10,7 +10,10 @@
  *   3. Programmatic override: setEmbeddingConfig()
  */
 
-import { loadCLIConfig, type EmbeddingConfig as StoredEmbeddingConfig } from '../../storage/repo-manager.js';
+import {
+  loadCLIConfig,
+  type EmbeddingConfig as StoredEmbeddingConfig,
+} from '../../storage/repo-manager.js';
 
 const HTTP_TIMEOUT_MS = 30_000;
 const HTTP_MAX_RETRIES = 2;
@@ -141,7 +144,9 @@ export const warmConfigCache = async (): Promise<void> => {
   try {
     const cliConfig = await loadCLIConfig();
     _cachedFileConfig = cliConfig.embedding;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   _cachedFileConfigLoaded = true;
 };
 
@@ -149,9 +154,7 @@ const parseDims = (raw: string | undefined): number | undefined => {
   if (raw === undefined) return undefined;
   const parsed = parseInt(raw, 10);
   if (Number.isNaN(parsed) || parsed <= 0) {
-    throw new Error(
-      `GITNEXUS_EMBEDDING_DIMS must be a positive integer, got "${raw}"`,
-    );
+    throw new Error(`GITNEXUS_EMBEDDING_DIMS must be a positive integer, got "${raw}"`);
   }
   return parsed;
 };

@@ -33,8 +33,8 @@ export const embedText = async (text: string): Promise<Float32Array> => {
   if (!isHttpMode()) {
     throw new Error(
       'Embedding endpoint not configured. ' +
-      'Set via API: PUT /api/config/embedding {url, model, apiKey, dimensions} ' +
-      'or env: GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL'
+        'Set via API: PUT /api/config/embedding {url, model, apiKey, dimensions} ' +
+        'or env: GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL',
     );
   }
   const [vec] = await httpEmbed([text]);
@@ -50,8 +50,8 @@ export const embedBatch = async (texts: string[]): Promise<Float32Array[]> => {
   if (!isHttpMode()) {
     throw new Error(
       'Embedding endpoint not configured. ' +
-      'Set via API: PUT /api/config/embedding {url, model, apiKey, dimensions} ' +
-      'or env: GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL'
+        'Set via API: PUT /api/config/embedding {url, model, apiKey, dimensions} ' +
+        'or env: GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL',
     );
   }
   return httpEmbed(texts);

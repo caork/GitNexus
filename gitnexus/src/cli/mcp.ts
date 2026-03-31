@@ -34,11 +34,15 @@ export const mcpCommand = async (options?: { remote?: string }) => {
     try {
       await backend.init();
     } catch (err: any) {
-      console.error(`GitNexus: Failed to connect to remote service at ${serverUrl}: ${err.message}`);
+      console.error(
+        `GitNexus: Failed to connect to remote service at ${serverUrl}: ${err.message}`,
+      );
       process.exit(1);
     }
     const repos = await backend.listRepos();
-    console.error(`GitNexus: Connected to remote service at ${serverUrl} — ${repos.length} repo(s): ${repos.map((r) => r.name).join(', ')}`);
+    console.error(
+      `GitNexus: Connected to remote service at ${serverUrl} — ${repos.length} repo(s): ${repos.map((r) => r.name).join(', ')}`,
+    );
   } else {
     // Local mode — load from global registry
     const { LocalBackend } = await import('../mcp/local/local-backend.js');

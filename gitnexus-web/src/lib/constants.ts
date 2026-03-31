@@ -85,11 +85,11 @@ export const NODE_SIZES: Record<NodeLabel, number> = {
 // Each Ontology Interface gets a distinct hue family so all implementing
 // Object Types share a visual identity in the graph.
 export const INTERFACE_COLORS: Record<string, string> = {
-  Callable:          '#10b981',  // Emerald — functions, methods, constructors, macros
-  TypeDefinition:    '#f59e0b',  // Amber — classes, interfaces, structs, enums, traits
-  FileSystemEntry:   '#3b82f6',  // Blue — files, folders
-  ArchitecturalUnit: '#818cf8',  // Indigo — communities, processes
-  CodeEntity:        '#64748b',  // Slate — generic code elements (fallback)
+  Callable: '#10b981', // Emerald — functions, methods, constructors, macros
+  TypeDefinition: '#f59e0b', // Amber — classes, interfaces, structs, enums, traits
+  FileSystemEntry: '#3b82f6', // Blue — files, folders
+  ArchitecturalUnit: '#818cf8', // Indigo — communities, processes
+  CodeEntity: '#64748b', // Slate — generic code elements (fallback)
 };
 
 // Community color palette for cluster-based coloring

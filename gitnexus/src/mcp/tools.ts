@@ -393,9 +393,18 @@ repo is immediately available for query/context/impact/etc.`,
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Absolute path to the repository directory on the server.' },
-        embeddings: { type: 'boolean', description: 'Generate embeddings for semantic search (slower). Default: false.' },
-        force: { type: 'boolean', description: 'Force re-index even if already up to date. Default: false.' },
+        path: {
+          type: 'string',
+          description: 'Absolute path to the repository directory on the server.',
+        },
+        embeddings: {
+          type: 'boolean',
+          description: 'Generate embeddings for semantic search (slower). Default: false.',
+        },
+        force: {
+          type: 'boolean',
+          description: 'Force re-index even if already up to date. Default: false.',
+        },
       },
       required: ['path'],
     },

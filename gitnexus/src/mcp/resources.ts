@@ -43,7 +43,8 @@ export function getResourceDefinitions(): ResourceDefinition[] {
     {
       uri: 'gitnexus://ontology',
       name: 'Ontology Schema',
-      description: 'Object Types, Link Types, Interfaces, and Shared Properties. Read to understand entity types, their relationships, cardinality, and polymorphic interfaces.',
+      description:
+        'Object Types, Link Types, Interfaces, and Shared Properties. Read to understand entity types, their relationships, cardinality, and polymorphic interfaces.',
       mimeType: 'text/yaml',
     },
   ];
@@ -392,7 +393,11 @@ example_queries:
 /**
  * Cluster detail resource — queries graph directly via backend.queryClusterDetail()
  */
-async function getClusterDetailResource(name: string, backend: Backend, repoName?: string): Promise<string> {
+async function getClusterDetailResource(
+  name: string,
+  backend: Backend,
+  repoName?: string,
+): Promise<string> {
   try {
     const result = await backend.queryClusterDetail(name, repoName);
 
@@ -434,7 +439,11 @@ async function getClusterDetailResource(name: string, backend: Backend, repoName
 /**
  * Process detail resource — queries graph directly via backend.queryProcessDetail()
  */
-async function getProcessDetailResource(name: string, backend: Backend, repoName?: string): Promise<string> {
+async function getProcessDetailResource(
+  name: string,
+  backend: Backend,
+  repoName?: string,
+): Promise<string> {
   try {
     const result = await backend.queryProcessDetail(name, repoName);
 
@@ -526,24 +535,26 @@ async function getOntologyResource(): Promise<string> {
 
   for (const iface of schema.interfaces) {
     lines.push(`  - name: "${iface.apiName}"`);
-    if (iface.extends?.length) lines.push(`    extends: [${iface.extends.map(e => `"${e}"`).join(', ')}]`);
-    lines.push(`    properties: [${iface.properties.map(p => p.apiName).join(', ')}]`);
+    if (iface.extends?.length)
+      lines.push(`    extends: [${iface.extends.map((e) => `"${e}"`).join(', ')}]`);
+    lines.push(`    properties: [${iface.properties.map((p) => p.apiName).join(', ')}]`);
   }
 
   lines.push('');
   lines.push('object_types:');
-  for (const ot of schema.objectTypes.filter(t => t.status === 'active')) {
+  for (const ot of schema.objectTypes.filter((t) => t.status === 'active')) {
     lines.push(`  - name: "${ot.apiName}"`);
     lines.push(`    display: "${ot.displayName}"`);
-    if (ot.interfaces.length) lines.push(`    implements: [${ot.interfaces.map(i => `"${i}"`).join(', ')}]`);
+    if (ot.interfaces.length)
+      lines.push(`    implements: [${ot.interfaces.map((i) => `"${i}"`).join(', ')}]`);
     if (ot.sourceLabels.length > 1 || ot.sourceLabels[0] !== ot.apiName) {
-      lines.push(`    maps_from: [${ot.sourceLabels.map(l => `"${l}"`).join(', ')}]`);
+      lines.push(`    maps_from: [${ot.sourceLabels.map((l) => `"${l}"`).join(', ')}]`);
     }
   }
 
   lines.push('');
   lines.push('link_types:');
-  for (const lt of schema.linkTypes.filter(t => t.status === 'active')) {
+  for (const lt of schema.linkTypes.filter((t) => t.status === 'active')) {
     lines.push(`  - name: "${lt.apiName}"`);
     lines.push(`    from: "${lt.sourceType}" → to: "${lt.targetType}"`);
     lines.push(`    cardinality: ${lt.cardinality}`);

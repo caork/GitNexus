@@ -1,7 +1,7 @@
 name: Package Linux aarch64
 
 on:
-  workflow_dispatch:          # run manually from GitHub UI
+  workflow_dispatch: # run manually from GitHub UI
     inputs:
       version:
         description: 'Release tag (e.g. v1.0.0). Leave blank to use commit SHA.'
@@ -9,9 +9,9 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm   # native Linux aarch64 runner
+    runs-on: ubuntu-24.04-arm # native Linux aarch64 runner
     permissions:
-      contents: write           # needed to create/upload release
+      contents: write # needed to create/upload release
 
     steps:
       - uses: actions/checkout@v4

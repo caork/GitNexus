@@ -301,40 +301,50 @@ export const RightPanel = () => {
 
       {/* Repo context bar — always visible */}
       {projectName && (
-        <div className="relative flex items-center gap-2 px-4 py-2 bg-accent/5 border-b border-accent/20" ref={repoDropdownRef}>
-          <Database className="w-3.5 h-3.5 text-accent flex-shrink-0" />
+        <div
+          className="relative flex items-center gap-2 border-b border-accent/20 bg-accent/5 px-4 py-2"
+          ref={repoDropdownRef}
+        >
+          <Database className="h-3.5 w-3.5 flex-shrink-0 text-accent" />
           <span className="text-xs text-text-muted">Analyzing:</span>
           <button
             onClick={serverBaseUrl ? handleOpenRepoDropdown : undefined}
-            className={`flex items-center gap-1 text-sm font-medium truncate ${
+            className={`flex items-center gap-1 truncate text-sm font-medium ${
               serverBaseUrl
-                ? 'text-accent hover:underline cursor-pointer'
-                : 'text-text-primary cursor-default'
+                ? 'cursor-pointer text-accent hover:underline'
+                : 'cursor-default text-text-primary'
             }`}
           >
             <span className="truncate">{projectName}</span>
             {serverBaseUrl && (
-              <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${isRepoDropdownOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown
+                className={`h-3.5 w-3.5 flex-shrink-0 transition-transform ${isRepoDropdownOpen ? 'rotate-180' : ''}`}
+              />
             )}
           </button>
           {availableRepos.length >= 2 && (
-            <span className="ml-auto text-[10px] text-text-muted">{availableRepos.length} repos</span>
+            <span className="ml-auto text-[10px] text-text-muted">
+              {availableRepos.length} repos
+            </span>
           )}
 
           {/* Dropdown — shows all server repos for switching */}
           {isRepoDropdownOpen && serverBaseUrl && (
-            <div className="absolute top-full left-0 right-0 mt-0 bg-surface border border-border-subtle rounded-b-lg shadow-xl overflow-hidden z-50">
+            <div className="absolute top-full right-0 left-0 z-50 mt-0 overflow-hidden rounded-b-lg border border-border-subtle bg-surface shadow-xl">
               {isRefreshingRepos && (
-                <div className="px-4 py-2.5 flex items-center gap-2 text-text-muted text-xs">
-                  <RefreshCw className="w-3 h-3 animate-spin" />
+                <div className="flex items-center gap-2 px-4 py-2.5 text-xs text-text-muted">
+                  <RefreshCw className="h-3 w-3 animate-spin" />
                   <span>Loading repos from server...</span>
                 </div>
               )}
               {!isRefreshingRepos && availableRepos.length === 0 && (
-                <div className="px-4 py-3 text-xs text-text-muted text-center">
+                <div className="px-4 py-3 text-center text-xs text-text-muted">
                   No repos found on server.
                   <br />
-                  <span className="text-[10px]">Run <code className="bg-hover px-1 rounded">gitnexus analyze</code> on the server to index a repo.</span>
+                  <span className="text-[10px]">
+                    Run <code className="rounded bg-hover px-1">gitnexus analyze</code> on the
+                    server to index a repo.
+                  </span>
                 </div>
               )}
               {availableRepos.map((repo) => {
@@ -347,22 +357,28 @@ export const RightPanel = () => {
                       setIsRepoDropdownOpen(false);
                       switchRepo(repo.name);
                     }}
-                    className={`w-full px-4 py-2.5 flex items-center gap-2.5 text-left transition-colors disabled:opacity-60 ${
+                    className={`flex w-full items-center gap-2.5 px-4 py-2.5 text-left transition-colors disabled:opacity-60 ${
                       isCurrent
-                        ? 'bg-accent/10 border-l-2 border-accent'
-                        : 'hover:bg-hover border-l-2 border-transparent'
+                        ? 'border-l-2 border-accent bg-accent/10'
+                        : 'border-l-2 border-transparent hover:bg-hover'
                     }`}
                   >
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isCurrent ? 'bg-accent animate-pulse' : 'bg-text-muted'}`} />
-                    <div className="flex-1 min-w-0">
-                      <div className={`text-sm font-medium truncate ${isCurrent ? 'text-accent' : 'text-text-primary'}`}>
+                    <span
+                      className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${isCurrent ? 'animate-pulse bg-accent' : 'bg-text-muted'}`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div
+                        className={`truncate text-sm font-medium ${isCurrent ? 'text-accent' : 'text-text-primary'}`}
+                      >
                         {repo.name}
                       </div>
                       <div className="text-[11px] text-text-muted">
                         {repo.stats?.nodes ?? '?'} nodes · {repo.stats?.files ?? '?'} files
                       </div>
                     </div>
-                    {isCurrent && <span className="text-[10px] text-accent font-medium">active</span>}
+                    {isCurrent && (
+                      <span className="text-[10px] font-medium text-accent">active</span>
+                    )}
                   </button>
                 );
               })}
@@ -373,9 +389,11 @@ export const RightPanel = () => {
                     setIsRepoDropdownOpen(false);
                     setAddRepoOpen(true);
                   }}
-                  className="w-full px-4 py-2.5 flex items-center gap-2.5 text-left border-t border-border-subtle hover:bg-hover transition-colors text-accent text-sm"
+                  className="flex w-full items-center gap-2.5 border-t border-border-subtle px-4 py-2.5 text-left text-sm text-accent transition-colors hover:bg-hover"
                 >
-                  <span className="w-4 h-4 flex items-center justify-center rounded-full border border-accent/50 text-xs">+</span>
+                  <span className="flex h-4 w-4 items-center justify-center rounded-full border border-accent/50 text-xs">
+                    +
+                  </span>
                   <span>Add Repository</span>
                 </button>
               )}

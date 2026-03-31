@@ -6,7 +6,11 @@
  * goes through the configured HTTP embedding endpoint.
  */
 
-import { isHttpMode, getHttpDimensions, httpEmbedQuery } from '../../core/embeddings/http-client.js';
+import {
+  isHttpMode,
+  getHttpDimensions,
+  httpEmbedQuery,
+} from '../../core/embeddings/http-client.js';
 
 /**
  * Check if embedder is ready (HTTP endpoint configured)
@@ -20,7 +24,7 @@ export const embedQuery = async (query: string): Promise<number[]> => {
   if (!isHttpMode()) {
     throw new Error(
       'Embedding endpoint not configured. ' +
-      'Set via API: PUT /api/config/embedding or env: GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL'
+        'Set via API: PUT /api/config/embedding or env: GITNEXUS_EMBEDDING_URL + GITNEXUS_EMBEDDING_MODEL',
     );
   }
   return httpEmbedQuery(query);

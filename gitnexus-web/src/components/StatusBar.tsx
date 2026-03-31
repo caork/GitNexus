@@ -69,14 +69,14 @@ export const StatusBar = () => {
       {/* Center - Ontology Interface Legend */}
       {interfaceCounts && (
         <div className="flex items-center gap-3">
-          <span className="text-text-muted font-medium">Ontology:</span>
+          <span className="font-medium text-text-muted">Ontology:</span>
           {INTERFACE_LEGEND.map(({ name, label }) => {
             const count = interfaceCounts[name];
             if (!count) return null;
             return (
               <div key={name} className="flex items-center gap-1.5">
                 <span
-                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  className="h-2 w-2 flex-shrink-0 rounded-full"
                   style={{ backgroundColor: INTERFACE_COLORS[name] }}
                 />
                 <span>{label}</span>

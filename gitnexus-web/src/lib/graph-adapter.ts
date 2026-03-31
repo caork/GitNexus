@@ -20,8 +20,8 @@ export interface SigmaNodeAttributes {
   community?: number; // Community index from Leiden algorithm
   communityColor?: string; // Color assigned by community
   // Ontology metadata
-  objectType?: string;       // e.g. 'Function', 'Class', 'Community'
-  interfaces?: string[];     // e.g. ['Callable', 'CodeEntity']
+  objectType?: string; // e.g. 'Function', 'Class', 'Community'
+  interfaces?: string[]; // e.g. ['Callable', 'CodeEntity']
 }
 
 export interface SigmaEdgeAttributes {
@@ -205,8 +205,6 @@ export const knowledgeGraphToGraphology = (
       endLine: node.properties.endLine,
       hidden: false,
       mass: getNodeMass(node.label, nodeCount),
-      
-      
     });
   });
 
@@ -272,8 +270,6 @@ export const knowledgeGraphToGraphology = (
       mass: getNodeMass(node.label, nodeCount),
       community: communityIndex,
       communityColor: hasCommunity ? getCommunityColor(communityIndex!) : undefined,
-      
-      
     });
   };
 

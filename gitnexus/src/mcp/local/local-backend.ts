@@ -463,17 +463,25 @@ export class LocalBackend implements Backend {
       let stdout = '';
       let stderr = '';
 
-      proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      proc.stdout?.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      proc.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
 
       proc.on('close', async (code) => {
         if (code === 0) {
           // Refresh registry so the new repo is immediately available
           await this.refreshRepos();
           const repoName = pathM.basename(repoPath);
-          resolve(`Successfully indexed repository "${repoName}" at ${repoPath}.\n\nYou can now use it with: gitnexus_query({ query: "...", repo: "${repoName}" })`);
+          resolve(
+            `Successfully indexed repository "${repoName}" at ${repoPath}.\n\nYou can now use it with: gitnexus_query({ query: "...", repo: "${repoName}" })`,
+          );
         } else {
-          reject(new Error(`Analysis failed (exit code ${code}): ${stderr.trim() || stdout.trim()}`));
+          reject(
+            new Error(`Analysis failed (exit code ${code}): ${stderr.trim() || stdout.trim()}`),
+          );
         }
       });
 

@@ -38,7 +38,11 @@ export const saveOntology = async (schema: OntologySchema): Promise<void> => {
   const filePath = getOntologyPath();
   await fs.writeFile(filePath, JSON.stringify(schema, null, 2), 'utf-8');
   if (process.platform !== 'win32') {
-    try { await fs.chmod(filePath, 0o644); } catch { /* best-effort */ }
+    try {
+      await fs.chmod(filePath, 0o644);
+    } catch {
+      /* best-effort */
+    }
   }
 };
 
@@ -48,7 +52,9 @@ export const saveOntology = async (schema: OntologySchema): Promise<void> => {
 export const resetOntology = async (): Promise<OntologySchema> => {
   try {
     await fs.unlink(getOntologyPath());
-  } catch { /* file may not exist */ }
+  } catch {
+    /* file may not exist */
+  }
   return DEFAULT_ONTOLOGY;
 };
 
@@ -73,7 +79,10 @@ export const getDefaultOntology = (): OntologySchema => DEFAULT_ONTOLOGY;
  * Resolve a GitNexus NodeLabel to its Object Type apiName.
  * Returns undefined if the label is not mapped.
  */
-export const resolveObjectType = (schema: OntologySchema, nodeLabel: string): string | undefined => {
+export const resolveObjectType = (
+  schema: OntologySchema,
+  nodeLabel: string,
+): string | undefined => {
   for (const ot of schema.objectTypes) {
     if (ot.sourceLabels.includes(nodeLabel)) return ot.apiName;
   }
@@ -94,8 +103,11 @@ export const resolveLinkType = (schema: OntologySchema, relType: string): string
 /**
  * Get all interfaces that an Object Type implements (including inherited).
  */
-export const getInterfacesForType = (schema: OntologySchema, objectTypeApiName: string): string[] => {
-  const ot = schema.objectTypes.find(t => t.apiName === objectTypeApiName);
+export const getInterfacesForType = (
+  schema: OntologySchema,
+  objectTypeApiName: string,
+): string[] => {
+  const ot = schema.objectTypes.find((t) => t.apiName === objectTypeApiName);
   if (!ot) return [];
 
   const result = new Set<string>();
@@ -106,7 +118,7 @@ export const getInterfacesForType = (schema: OntologySchema, objectTypeApiName: 
     if (result.has(ifaceName)) continue;
     result.add(ifaceName);
 
-    const iface = schema.interfaces.find(i => i.apiName === ifaceName);
+    const iface = schema.interfaces.find((i) => i.apiName === ifaceName);
     if (iface?.extends) {
       queue.push(...iface.extends);
     }
