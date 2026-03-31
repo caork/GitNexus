@@ -22,9 +22,20 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      # Install all deps (both workspaces)
-      - name: Install dependencies
+      # Install all deps (gitnexus-shared first, then server + web UI)
+      - name: Install gitnexus-shared dependencies
+        working-directory: gitnexus-shared
         run: npm install
+
+      - name: Build gitnexus-shared
+        working-directory: gitnexus-shared
+        run: npm run build
+
+      - name: Install server dependencies
+        run: npm install --prefix gitnexus
+
+      - name: Install web UI dependencies
+        run: npm install --prefix gitnexus-web
 
       # ── Build ────────────────────────────────────────────────────────
       - name: Build server (TypeScript → JS)
