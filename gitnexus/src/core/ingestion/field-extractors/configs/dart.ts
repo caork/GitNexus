@@ -1,6 +1,6 @@
 // gitnexus/src/core/ingestion/field-extractors/configs/dart.ts
 
-import { SupportedLanguages } from '../../../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 import type { FieldExtractionConfig } from '../generic.js';
 import { hasKeyword } from './helpers.js';
 import { extractSimpleTypeName } from '../../type-extractors/shared.js';
@@ -45,8 +45,12 @@ export const dartConfig: FieldExtractionConfig = {
     // declaration > type_identifier (first named child usually)
     for (let i = 0; i < node.namedChildCount; i++) {
       const child = node.namedChild(i);
-      if (child && (child.type === 'type_identifier' || child.type === 'generic_type'
-        || child.type === 'function_type')) {
+      if (
+        child &&
+        (child.type === 'type_identifier' ||
+          child.type === 'generic_type' ||
+          child.type === 'function_type')
+      ) {
         return extractSimpleTypeName(child) ?? child.text?.trim();
       }
     }

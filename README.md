@@ -19,6 +19,8 @@
     <img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue.svg" alt="License: PolyForm Noncommercial"/>
   </a>
 
+  <p><strong>Enterprise (SaaS & Self-hosted)</strong> - <a href="https://akonlabs.com">akonlabs.com</a></p>
+
 </div>
 
 **Building nervous system for agent context.**
@@ -56,6 +58,28 @@ https://github.com/user-attachments/assets/172685ba-8e54-4ea7-9ad1-e31a3398da72
 | **Privacy** | Everything local, no network                                   | Code stays on server, queries over LAN/VPN                   | Everything in-browser, no server                             |
 
 > **Bridge mode:** `gitnexus serve` connects the CLI and Web UI — the web UI auto-detects the local server and can browse all your CLI-indexed repos without re-uploading or re-indexing.
+
+---
+
+## Enterprise
+
+GitNexus is available as an **enterprise offering** - either as a fully managed **SaaS** or a **self-hosted** deployment. Also available for **commercial use** of the OSS version with proper licensing.
+
+Enterprise includes:
+- **PR Review** - automated blast radius analysis on pull requests
+- **Auto-updating Code Wiki** - always up-to-date documentation (Code Wiki is also available in OSS)
+- **Auto-reindexing** - knowledge graph stays fresh automatically
+- **Multi-repo support** - unified graph across repositories
+- **OCaml support** - additional language coverage
+- **Priority feature/language support** - request new languages or features
+
+**Upcoming:**
+- Auto regression forensics
+- End-to-end test generation
+
+👉 Learn more at [akonlabs.com](https://akonlabs.com)
+
+💬 For commercial licensing or enterprise inquiries, ping us on [Discord](https://discord.gg/AAsRVT6fGb) or drop an email at founders@akonlabs.com
 
 ---
 
@@ -165,13 +189,14 @@ args = ["-y", "gitnexus@latest", "mcp"]
 ### CLI Commands
 
 ```bash
-gitnexus setup                    # Configure MCP for your editors (one-time)
-gitnexus analyze [path]           # Index a repository (or update stale index)
-gitnexus analyze --force          # Force full re-index
-gitnexus analyze --skills         # Generate repo-specific skill files from detected communities
+gitnexus setup                   # Configure MCP for your editors (one-time)
+gitnexus analyze [path]          # Index a repository (or update stale index)
+gitnexus analyze --force         # Force full re-index
+gitnexus analyze --skills        # Generate repo-specific skill files from detected communities
 gitnexus analyze --skip-embeddings  # Skip embedding generation (faster)
-gitnexus analyze --embeddings     # Enable embedding generation (slower, better search)
-gitnexus analyze --verbose        # Log skipped files when parsers are unavailable
+gitnexus analyze --skip-agents-md  # Preserve custom AGENTS.md/CLAUDE.md gitnexus section edits
+gitnexus analyze --embeddings    # Enable embedding generation (slower, better search)
+gitnexus analyze --verbose       # Log skipped files when parsers are unavailable
 gitnexus mcp                     # Start MCP server (stdio) — serves all indexed repos
 gitnexus mcp --remote <url>     # Start MCP client — proxy to a remote GitNexus service
 gitnexus serve                   # Start local HTTP server (multi-repo) for web UI connection
@@ -370,8 +395,8 @@ Or run locally:
 
 ```bash
 git clone https://github.com/abhigyanpatwari/gitnexus.git
-cd gitnexus/gitnexus-web
-npm install
+cd gitnexus/gitnexus-shared && npm install && npm run build
+cd ../gitnexus-web && npm install
 npm run dev
 ```
 

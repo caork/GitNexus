@@ -6,7 +6,7 @@ import { pythonConfig } from '../../src/core/ingestion/field-extractors/configs/
 import { goConfig } from '../../src/core/ingestion/field-extractors/configs/go.js';
 import { cppConfig } from '../../src/core/ingestion/field-extractors/configs/c-cpp.js';
 import { rubyConfig } from '../../src/core/ingestion/field-extractors/configs/ruby.js';
-import type { FieldExtractorContext, ExtractedFields } from '../../src/core/ingestion/field-types.js';
+import type { FieldExtractorContext } from '../../src/core/ingestion/field-types.js';
 import type { TypeEnvironment } from '../../src/core/ingestion/type-env.js';
 import { createSymbolTable } from '../../src/core/ingestion/symbol-table.js';
 import Parser from 'tree-sitter';
@@ -15,6 +15,8 @@ import Python from 'tree-sitter-python';
 import Go from 'tree-sitter-go';
 import Cpp from 'tree-sitter-cpp';
 import Ruby from 'tree-sitter-ruby';
+import CSharp from 'tree-sitter-c-sharp';
+import { csharpConfig as csharpFieldConfig } from '../../src/core/ingestion/field-extractors/configs/csharp.js';
 import { SupportedLanguages } from '../../src/config/supported-languages.js';
 
 const parser = new Parser();
@@ -168,21 +170,21 @@ describe('TypeScriptFieldExtractor', () => {
       expect(result!.fields).toHaveLength(4);
 
       const fields = result!.fields;
-      
-      const idField = fields.find(f => f.name === 'id');
+
+      const idField = fields.find((f) => f.name === 'id');
       expect(idField).toBeDefined();
       expect(idField!.visibility).toBe('public');
       expect(idField!.type).toBe('number');
 
-      const secretKeyField = fields.find(f => f.name === 'secretKey');
+      const secretKeyField = fields.find((f) => f.name === 'secretKey');
       expect(secretKeyField).toBeDefined();
       expect(secretKeyField!.visibility).toBe('private');
 
-      const createdAtField = fields.find(f => f.name === 'createdAt');
+      const createdAtField = fields.find((f) => f.name === 'createdAt');
       expect(createdAtField).toBeDefined();
       expect(createdAtField!.visibility).toBe('protected');
 
-      const nameField = fields.find(f => f.name === 'name');
+      const nameField = fields.find((f) => f.name === 'name');
       expect(nameField).toBeDefined();
       expect(nameField!.visibility).toBe('public'); // default
     });
@@ -199,12 +201,12 @@ describe('TypeScriptFieldExtractor', () => {
 
       expect(result).not.toBeNull();
       expect(result!.fields).toHaveLength(2);
-      
-      const nameField = result!.fields.find(f => f.name === 'name');
+
+      const nameField = result!.fields.find((f) => f.name === 'name');
       expect(nameField).toBeDefined();
       expect(nameField!.type).toBeNull();
 
-      const ageField = result!.fields.find(f => f.name === 'age');
+      const ageField = result!.fields.find((f) => f.name === 'age');
       expect(ageField).toBeDefined();
       expect(ageField!.type).toBeNull();
     });
@@ -222,11 +224,11 @@ describe('TypeScriptFieldExtractor', () => {
       expect(result).not.toBeNull();
       expect(result!.fields).toHaveLength(2);
 
-      const usersField = result!.fields.find(f => f.name === 'users');
+      const usersField = result!.fields.find((f) => f.name === 'users');
       expect(usersField).toBeDefined();
       expect(usersField!.type).toBe('Map<string, User>');
 
-      const idsField = result!.fields.find(f => f.name === 'ids');
+      const idsField = result!.fields.find((f) => f.name === 'ids');
       expect(idsField).toBeDefined();
       expect(idsField!.type).toBe('Array<number>');
     });
@@ -261,15 +263,15 @@ describe('TypeScriptFieldExtractor', () => {
       expect(result!.ownerFqn).toBe('UserDTO');
       expect(result!.fields).toHaveLength(3);
 
-      const idField = result!.fields.find(f => f.name === 'id');
+      const idField = result!.fields.find((f) => f.name === 'id');
       expect(idField).toBeDefined();
       expect(idField!.type).toBe('number');
 
-      const nameField = result!.fields.find(f => f.name === 'name');
+      const nameField = result!.fields.find((f) => f.name === 'name');
       expect(nameField).toBeDefined();
       expect(nameField!.type).toBe('string');
 
-      const emailField = result!.fields.find(f => f.name === 'email');
+      const emailField = result!.fields.find((f) => f.name === 'email');
       expect(emailField).toBeDefined();
     });
 
@@ -287,11 +289,11 @@ describe('TypeScriptFieldExtractor', () => {
       expect(result!.ownerFqn).toBe('BaseEntity');
       expect(result!.fields).toHaveLength(2);
 
-      const idField = result!.fields.find(f => f.name === 'id');
+      const idField = result!.fields.find((f) => f.name === 'id');
       expect(idField).toBeDefined();
       expect(idField!.visibility).toBe('protected');
 
-      const createdAtField = result!.fields.find(f => f.name === 'createdAt');
+      const createdAtField = result!.fields.find((f) => f.name === 'createdAt');
       expect(createdAtField).toBeDefined();
       expect(createdAtField!.visibility).toBe('public');
     });
@@ -309,11 +311,11 @@ describe('TypeScriptFieldExtractor', () => {
       expect(result).not.toBeNull();
       expect(result!.fields).toHaveLength(2);
 
-      const usersField = result!.fields.find(f => f.name === 'users');
+      const usersField = result!.fields.find((f) => f.name === 'users');
       expect(usersField).toBeDefined();
       expect(usersField!.type).toBe('User[]');
 
-      const idsField = result!.fields.find(f => f.name === 'ids');
+      const idsField = result!.fields.find((f) => f.name === 'ids');
       expect(idsField).toBeDefined();
       expect(idsField!.type).toBe('number[]');
     });
@@ -354,11 +356,11 @@ describe('TypeScriptFieldExtractor', () => {
       expect(result!.ownerFqn).toBe('UserDTO');
       expect(result!.fields).toHaveLength(2);
 
-      const idField = result!.fields.find(f => f.name === 'id');
+      const idField = result!.fields.find((f) => f.name === 'id');
       expect(idField).toBeDefined();
       expect(idField!.type).toBe('number');
 
-      const nameField = result!.fields.find(f => f.name === 'name');
+      const nameField = result!.fields.find((f) => f.name === 'name');
       expect(nameField).toBeDefined();
       expect(nameField!.type).toBe('string');
     });
@@ -444,12 +446,12 @@ describe('GenericFieldExtractor — TypeScript config', () => {
     expect(result!.ownerFqn).toBe('User');
     expect(result!.fields).toHaveLength(2);
 
-    const nameField = result!.fields.find(f => f.name === 'name');
+    const nameField = result!.fields.find((f) => f.name === 'name');
     expect(nameField).toBeDefined();
     expect(nameField!.visibility).toBe('public');
     expect(nameField!.type).toBe('string');
 
-    const ageField = result!.fields.find(f => f.name === 'age');
+    const ageField = result!.fields.find((f) => f.name === 'age');
     expect(ageField).toBeDefined();
     expect(ageField!.visibility).toBe('private');
     expect(ageField!.type).toBe('number');
@@ -473,8 +475,8 @@ describe('GenericFieldExtractor — TypeScript config', () => {
     expect(result).not.toBeNull();
     expect(result!.ownerFqn).toBe('Settings');
     expect(result!.fields).toHaveLength(2);
-    expect(result!.fields.map(f => f.name)).toContain('theme');
-    expect(result!.fields.map(f => f.name)).toContain('debug');
+    expect(result!.fields.map((f) => f.name)).toContain('theme');
+    expect(result!.fields.map((f) => f.name)).toContain('debug');
   });
 
   it('returns null for non-type-declaration nodes', () => {
@@ -499,12 +501,12 @@ describe('GenericFieldExtractor — TypeScript config', () => {
     expect(result).not.toBeNull();
     expect(result!.fields).toHaveLength(2);
 
-    const maxField = result!.fields.find(f => f.name === 'MAX');
+    const maxField = result!.fields.find((f) => f.name === 'MAX');
     expect(maxField).toBeDefined();
     expect(maxField!.isStatic).toBe(true);
     expect(maxField!.isReadonly).toBe(true);
 
-    const countField = result!.fields.find(f => f.name === 'count');
+    const countField = result!.fields.find((f) => f.name === 'count');
     expect(countField).toBeDefined();
     expect(countField!.isStatic).toBe(false);
     expect(countField!.isReadonly).toBe(false);
@@ -537,12 +539,12 @@ describe('GenericFieldExtractor — Python', () => {
     expect(result!.ownerFqn).toBe('User');
     expect(result!.fields).toHaveLength(2);
 
-    const nameField = result!.fields.find(f => f.name === 'name');
+    const nameField = result!.fields.find((f) => f.name === 'name');
     expect(nameField).toBeDefined();
     expect(nameField!.type).toBe('str');
     expect(nameField!.visibility).toBe('public');
 
-    const emailField = result!.fields.find(f => f.name === 'email');
+    const emailField = result!.fields.find((f) => f.name === 'email');
     expect(emailField).toBeDefined();
     expect(emailField!.type).toBe('str');
   });
@@ -560,15 +562,15 @@ describe('GenericFieldExtractor — Python', () => {
     expect(result).not.toBeNull();
     expect(result!.fields).toHaveLength(3);
 
-    const nameField = result!.fields.find(f => f.name === 'name');
+    const nameField = result!.fields.find((f) => f.name === 'name');
     expect(nameField).toBeDefined();
     expect(nameField!.visibility).toBe('public');
 
-    const internalField = result!.fields.find(f => f.name === '_internal');
+    const internalField = result!.fields.find((f) => f.name === '_internal');
     expect(internalField).toBeDefined();
     expect(internalField!.visibility).toBe('protected');
 
-    const secretField = result!.fields.find(f => f.name === '__secret');
+    const secretField = result!.fields.find((f) => f.name === '__secret');
     expect(secretField).toBeDefined();
     expect(secretField!.visibility).toBe('private');
   });
@@ -640,7 +642,9 @@ describe('GenericFieldExtractor — Go', () => {
   });
 
   it('detects uppercase-based visibility via extractVisibility on field nodes', () => {
-    const { typeDecl } = findTypeSpec(`type Config struct {\n\tHost string\n\tport int\n\tTimeout int\n}`);
+    const { typeDecl } = findTypeSpec(
+      `type Config struct {\n\tHost string\n\tport int\n\tTimeout int\n}`,
+    );
     // Navigate to field_declaration nodes inside the struct
     // type_declaration > type_spec > struct_type > field_declaration_list > field_declaration
     const typeSpec = typeDecl.namedChild(0)!;
@@ -715,16 +719,16 @@ private:
     expect(result!.ownerFqn).toBe('User');
     expect(result!.fields).toHaveLength(3);
 
-    const idField = result!.fields.find(f => f.name === 'id');
+    const idField = result!.fields.find((f) => f.name === 'id');
     expect(idField).toBeDefined();
     expect(idField!.visibility).toBe('public');
     expect(idField!.type).toBe('int');
 
-    const nameField = result!.fields.find(f => f.name === 'name');
+    const nameField = result!.fields.find((f) => f.name === 'name');
     expect(nameField).toBeDefined();
     expect(nameField!.visibility).toBe('public');
 
-    const pwField = result!.fields.find(f => f.name === 'password');
+    const pwField = result!.fields.find((f) => f.name === 'password');
     expect(pwField).toBeDefined();
     expect(pwField!.visibility).toBe('private');
   });
@@ -745,15 +749,15 @@ public:
     expect(result).not.toBeNull();
     expect(result!.fields).toHaveLength(3);
 
-    const xField = result!.fields.find(f => f.name === 'x');
+    const xField = result!.fields.find((f) => f.name === 'x');
     expect(xField).toBeDefined();
     expect(xField!.visibility).toBe('protected');
 
-    const yField = result!.fields.find(f => f.name === 'y');
+    const yField = result!.fields.find((f) => f.name === 'y');
     expect(yField).toBeDefined();
     expect(yField!.visibility).toBe('protected');
 
-    const zField = result!.fields.find(f => f.name === 'z');
+    const zField = result!.fields.find((f) => f.name === 'z');
     expect(zField).toBeDefined();
     expect(zField!.visibility).toBe('public');
   });
@@ -801,11 +805,11 @@ public:
     expect(result).not.toBeNull();
     expect(result!.fields).toHaveLength(2);
 
-    const countField = result!.fields.find(f => f.name === 'count');
+    const countField = result!.fields.find((f) => f.name === 'count');
     expect(countField).toBeDefined();
     expect(countField!.isStatic).toBe(true);
 
-    const maxField = result!.fields.find(f => f.name === 'MAX_SIZE');
+    const maxField = result!.fields.find((f) => f.name === 'MAX_SIZE');
     expect(maxField).toBeDefined();
     expect(maxField!.isReadonly).toBe(true);
   });
@@ -836,7 +840,7 @@ end`);
     expect(result!.ownerFqn).toBe('User');
     expect(result!.fields).toHaveLength(3);
 
-    const names = result!.fields.map(f => f.name);
+    const names = result!.fields.map((f) => f.name);
     expect(names).toContain('name');
     expect(names).toContain('email');
     expect(names).toContain('age');
@@ -889,15 +893,15 @@ end`);
     expect(result).not.toBeNull();
     expect(result!.fields).toHaveLength(3);
 
-    const nameField = result!.fields.find(f => f.name === 'name');
+    const nameField = result!.fields.find((f) => f.name === 'name');
     expect(nameField).toBeDefined();
     expect(nameField!.isReadonly).toBe(false);
 
-    const idField = result!.fields.find(f => f.name === 'id');
+    const idField = result!.fields.find((f) => f.name === 'id');
     expect(idField).toBeDefined();
     expect(idField!.isReadonly).toBe(true);
 
-    const pwField = result!.fields.find(f => f.name === 'password');
+    const pwField = result!.fields.find((f) => f.name === 'password');
     expect(pwField).toBeDefined();
     expect(pwField!.isReadonly).toBe(false);
   });
@@ -925,5 +929,80 @@ end`);
 
     expect(result).not.toBeNull();
     expect(result!.fields[0].isStatic).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C# config — primary constructor fields
+// ---------------------------------------------------------------------------
+
+describe('GenericFieldExtractor — C# primary constructor fields', () => {
+  const parser = new Parser();
+  const extractor = createFieldExtractor(csharpFieldConfig);
+  const mockContext = createMockContext();
+  mockContext.language = SupportedLanguages.CSharp;
+  mockContext.filePath = 'test.cs';
+
+  it('extracts record positional parameters as public readonly fields', () => {
+    parser.setLanguage(CSharp);
+    const tree = parser.parse('public record Person(string Name, int Age);');
+    const classNode = tree.rootNode.child(0);
+    expect(classNode).toBeDefined();
+
+    const result = extractor.extract(classNode!, mockContext);
+    expect(result).not.toBeNull();
+    expect(result!.ownerFqn).toBe('Person');
+    expect(result!.fields).toHaveLength(2);
+
+    const nameField = result!.fields.find((f) => f.name === 'Name');
+    expect(nameField).toBeDefined();
+    expect(nameField!.type).toBe('string');
+    expect(nameField!.visibility).toBe('public');
+    expect(nameField!.isReadonly).toBe(true);
+    expect(nameField!.isStatic).toBe(false);
+
+    const ageField = result!.fields.find((f) => f.name === 'Age');
+    expect(ageField).toBeDefined();
+    expect(ageField!.type).toBe('int');
+    expect(ageField!.visibility).toBe('public');
+    expect(ageField!.isReadonly).toBe(true);
+  });
+
+  it('extracts class primary constructor parameters as private fields', () => {
+    parser.setLanguage(CSharp);
+    const tree = parser.parse(`public class Point(int x, int y) {
+      public int X => x;
+    }`);
+    const classNode = tree.rootNode.child(0);
+    expect(classNode).toBeDefined();
+
+    const result = extractor.extract(classNode!, mockContext);
+    expect(result).not.toBeNull();
+
+    const xField = result!.fields.find((f) => f.name === 'x');
+    expect(xField).toBeDefined();
+    expect(xField!.type).toBe('int');
+    expect(xField!.visibility).toBe('private');
+    expect(xField!.isReadonly).toBe(false);
+  });
+
+  it('combines body fields with primary constructor fields', () => {
+    parser.setLanguage(CSharp);
+    const tree = parser.parse(`public class Service(string name) {
+      public int Count;
+    }`);
+    const classNode = tree.rootNode.child(0);
+
+    const result = extractor.extract(classNode!, mockContext);
+    expect(result).not.toBeNull();
+    // Body field + primary constructor field
+    expect(result!.fields.length).toBeGreaterThanOrEqual(2);
+
+    const nameField = result!.fields.find((f) => f.name === 'name');
+    expect(nameField).toBeDefined();
+    expect(nameField!.visibility).toBe('private');
+
+    const countField = result!.fields.find((f) => f.name === 'Count');
+    expect(countField).toBeDefined();
   });
 });

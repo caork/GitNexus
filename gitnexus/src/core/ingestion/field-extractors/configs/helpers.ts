@@ -129,7 +129,10 @@ export function typeFromAnnotation(node: SyntaxNode): string | undefined {
  * Find the first descendant (depth-first, one level) matching one of the given types
  * and return its text via extractSimpleTypeName.
  */
-export function typeFromDescendant(node: SyntaxNode, types: ReadonlySet<string>): string | undefined {
+export function typeFromDescendant(
+  node: SyntaxNode,
+  types: ReadonlySet<string>,
+): string | undefined {
   for (let i = 0; i < node.namedChildCount; i++) {
     const child = node.namedChild(i);
     if (!child) continue;
@@ -145,4 +148,19 @@ export function typeFromDescendant(node: SyntaxNode, types: ReadonlySet<string>)
     }
   }
   return undefined;
+}
+
+/**
+ * Collect all modifier keyword texts from a declaration node's named `modifier` children.
+ * Used by C# configs to detect compound visibilities (protected internal, private protected).
+ */
+export function collectModifierTexts(node: SyntaxNode): Set<string> {
+  const result = new Set<string>();
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child && child.type === 'modifier') {
+      result.add(child.text.trim());
+    }
+  }
+  return result;
 }

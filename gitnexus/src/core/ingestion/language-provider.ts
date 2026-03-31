@@ -9,15 +9,16 @@
  * so adding a language to the enum without creating a provider is a compiler error.
  */
 
-import type { SupportedLanguages } from '../../config/supported-languages.js';
+import type { SupportedLanguages } from 'gitnexus-shared';
 import type { LanguageTypeConfig } from './type-extractors/types.js';
 import type { CallRouter } from './call-routing.js';
 import type { ExportChecker } from './export-detection.js';
 import type { FieldExtractor } from './field-extractor.js';
+import type { MethodExtractor } from './method-types.js';
 import type { ImportResolverFn } from './import-resolvers/types.js';
 import type { NamedBindingExtractorFn } from './named-bindings/types.js';
 import type { SyntaxNode } from './utils/ast-helpers.js';
-import type { NodeLabel } from '../graph/types.js';
+import type { NodeLabel } from 'gitnexus-shared';
 
 // ── Shared type aliases ────────────────────────────────────────────────────
 /** Tree-sitter query captures: capture name → AST node (or undefined if not captured). */
@@ -25,7 +26,12 @@ export type CaptureMap = Record<string, SyntaxNode | undefined>;
 
 // ── Strategy tag types ─────────────────────────────────────────────────────
 /** MRO strategy for multiple inheritance resolution. */
-export type MroStrategy = 'first-wins' | 'c3' | 'leftmost-base' | 'implements-split' | 'qualified-syntax';
+export type MroStrategy =
+  | 'first-wins'
+  | 'c3'
+  | 'leftmost-base'
+  | 'implements-split'
+  | 'qualified-syntax';
 /** How a language handles imports — determines wildcard synthesis behavior. */
 export type ImportSemantics = 'named' | 'wildcard' | 'namespace';
 
@@ -94,7 +100,9 @@ interface LanguageProviderConfig {
    *  language provider inspect each ancestor and return the resolved result.
    *  Return null to continue the default walk.
    *  Default: undefined (standard parent walk only). */
-  readonly enclosingFunctionFinder?: (ancestorNode: SyntaxNode) => { funcName: string; label: NodeLabel } | null;
+  readonly enclosingFunctionFinder?: (
+    ancestorNode: SyntaxNode,
+  ) => { funcName: string; label: NodeLabel } | null;
 
   // ── Labels ────────────────────────────────────────────────────────
   /** Override the default node label for definition.function captures.
@@ -119,6 +127,10 @@ interface LanguageProviderConfig {
    *  declarations. Produces FieldInfo[] with name, type, visibility, static,
    *  readonly metadata. Default: undefined (no field extraction). */
   readonly fieldExtractor?: FieldExtractor;
+  /** Method extractor for extracting method/function definitions from class/struct/interface
+   *  declarations. Produces MethodInfo[] with name, parameters, visibility, isAbstract,
+   *  isFinal, annotations metadata. Default: undefined (no method extraction). */
+  readonly methodExtractor?: MethodExtractor;
   /** Extract a semantic description for a definition node (e.g., PHP Eloquent
    *  property arrays, relation method descriptions).
    *  Default: undefined (no description extraction). */
@@ -139,7 +151,8 @@ interface LanguageProviderConfig {
 }
 
 /** Runtime type — same as LanguageProviderConfig but with defaults guaranteed present. */
-export interface LanguageProvider extends Omit<LanguageProviderConfig,
+export interface LanguageProvider extends Omit<
+  LanguageProviderConfig,
   'importSemantics' | 'heritageDefaultEdge' | 'mroStrategy'
 > {
   readonly importSemantics: ImportSemantics;
@@ -149,11 +162,12 @@ export interface LanguageProvider extends Omit<LanguageProviderConfig,
   readonly isBuiltInName: (name: string) => boolean;
 }
 
-const DEFAULTS: Pick<LanguageProvider, 'importSemantics' | 'heritageDefaultEdge' | 'mroStrategy'> = {
-  importSemantics: 'named',
-  heritageDefaultEdge: 'EXTENDS',
-  mroStrategy: 'first-wins',
-};
+const DEFAULTS: Pick<LanguageProvider, 'importSemantics' | 'heritageDefaultEdge' | 'mroStrategy'> =
+  {
+    importSemantics: 'named',
+    heritageDefaultEdge: 'EXTENDS',
+    mroStrategy: 'first-wins',
+  };
 
 /** Define a language provider — required fields must be supplied, optional fields get sensible defaults. */
 export function defineLanguage(config: LanguageProviderConfig): LanguageProvider {

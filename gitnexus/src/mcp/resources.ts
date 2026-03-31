@@ -1,6 +1,6 @@
 /**
  * MCP Resources (Multi-Repo)
- * 
+ *
  * Provides structured on-demand data to AI agents.
  * All resources use repo-scoped URIs: gitnexus://repo/{name}/context
  */
@@ -30,7 +30,8 @@ export function getResourceDefinitions(): ResourceDefinition[] {
     {
       uri: 'gitnexus://repos',
       name: 'All Indexed Repositories',
-      description: 'List of all indexed repos with stats. Read this first to discover available repos.',
+      description:
+        'List of all indexed repos with stats. Read this first to discover available repos.',
       mimeType: 'text/yaml',
     },
     {
@@ -107,10 +108,18 @@ function parseUri(uri: string): { repoName?: string; resourceType: string; param
     const rest = repoMatch[2];
 
     if (rest.startsWith('cluster/')) {
-      return { repoName, resourceType: 'cluster', param: decodeURIComponent(rest.replace('cluster/', '')) };
+      return {
+        repoName,
+        resourceType: 'cluster',
+        param: decodeURIComponent(rest.replace('cluster/', '')),
+      };
     }
     if (rest.startsWith('process/')) {
-      return { repoName, resourceType: 'process', param: decodeURIComponent(rest.replace('process/', '')) };
+      return {
+        repoName,
+        resourceType: 'process',
+        param: decodeURIComponent(rest.replace('process/', '')),
+      };
     }
 
     return { repoName, resourceType: rest };
@@ -129,7 +138,7 @@ export async function readResource(uri: string, backend: Backend): Promise<strin
   if (parsed.resourceType === 'repos') {
     return getReposResource(backend);
   }
-  
+
   // Setup resource — returns AGENTS.md content for all repos
   if (parsed.resourceType === 'setup') {
     return getSetupResource(backend);
@@ -206,21 +215,21 @@ async function getContextResource(backend: Backend, repoName?: string): Promise<
   if (!context) {
     return 'error: No codebase loaded. Run: gitnexus analyze';
   }
-  
+
   // Check staleness
   const repoPath = repo.repoPath;
   const lastCommit = repo.lastCommit || 'HEAD';
-  const staleness = repoPath ? checkStaleness(repoPath, lastCommit) : { isStale: false, commitsBehind: 0 };
-  
-  const lines: string[] = [
-    `project: ${context.projectName}`,
-  ];
-  
+  const staleness = repoPath
+    ? checkStaleness(repoPath, lastCommit)
+    : { isStale: false, commitsBehind: 0 };
+
+  const lines: string[] = [`project: ${context.projectName}`];
+
   if (staleness.isStale && staleness.hint) {
     lines.push('');
     lines.push(`staleness: "${staleness.hint}"`);
   }
-  
+
   lines.push('');
   lines.push('stats:');
   lines.push(`  files: ${context.stats.fileCount}`);
@@ -244,7 +253,7 @@ async function getContextResource(backend: Backend, repoName?: string): Promise<
   lines.push(`  - gitnexus://repo/${context.projectName}/processes: All execution flows`);
   lines.push(`  - gitnexus://repo/${context.projectName}/cluster/{name}: Module details`);
   lines.push(`  - gitnexus://repo/${context.projectName}/process/{name}: Process trace`);
-  
+
   return lines.join('\n');
 }
 
@@ -273,7 +282,9 @@ async function getClustersResource(backend: Backend, repoName?: string): Promise
     }
 
     if (result.clusters.length > displayLimit) {
-      lines.push(`\n# Showing top ${displayLimit} of ${result.clusters.length} modules. Use gitnexus_query for deeper search.`);
+      lines.push(
+        `\n# Showing top ${displayLimit} of ${result.clusters.length} modules. Use gitnexus_query for deeper search.`,
+      );
     }
 
     return lines.join('\n');
@@ -305,7 +316,9 @@ async function getProcessesResource(backend: Backend, repoName?: string): Promis
     }
 
     if (result.processes.length > displayLimit) {
-      lines.push(`\n# Showing top ${displayLimit} of ${result.processes.length} processes. Use gitnexus_query for deeper search.`);
+      lines.push(
+        `\n# Showing top ${displayLimit} of ${result.processes.length} processes. Use gitnexus_query for deeper search.`,
+      );
     }
 
     return lines.join('\n');
@@ -462,9 +475,9 @@ async function getSetupResource(backend: Backend): Promise<string> {
   if (repos.length === 0) {
     return '# GitNexus\n\nNo repositories indexed. Run: `npx gitnexus analyze` in a repository.';
   }
-  
+
   const sections: string[] = [];
-  
+
   for (const repo of repos) {
     const stats = repo.stats || {};
     const lines = [
@@ -493,7 +506,7 @@ async function getSetupResource(backend: Backend): Promise<string> {
     ];
     sections.push(lines.join('\n'));
   }
-  
+
   return sections.join('\n\n---\n\n');
 }
 

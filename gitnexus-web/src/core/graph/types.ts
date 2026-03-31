@@ -1,114 +1,19 @@
-export type NodeLabel =
-  | 'Project'
-  | 'Package'
-  | 'Module'
-  | 'Folder'
-  | 'File'
-  | 'Class'
-  | 'Function'
-  | 'Method'
-  | 'Variable'
-  | 'Interface'
-  | 'Enum'
-  | 'Decorator'
-  | 'Import'
-  | 'Type'
-  | 'CodeElement'
-  | 'Community'
-  | 'Process'
-  | 'Section'
-  | 'Struct'
-  | 'Trait'
-  | 'Impl'
-  | 'TypeAlias'
-  | 'Const'
-  | 'Static'
-  | 'Namespace'
-  | 'Union'
-  | 'Typedef'
-  | 'Macro'
-  | 'Property'
-  | 'Record'
-  | 'Delegate'
-  | 'Annotation'
-  | 'Constructor'
-  | 'Template';
+/**
+ * Web-specific graph types.
+ *
+ * Shared types (NodeLabel, GraphNode, etc.) should be imported
+ * directly from 'gitnexus-shared' at call sites.
+ *
+ * This file only defines web-specific additions.
+ */
+import type { GraphNode, GraphRelationship } from 'gitnexus-shared';
 
-
-export type NodeProperties = {
-  name: string,
-  filePath: string,
-  startLine?: number,
-  endLine?: number,
-  language?: string,
-  isExported?: boolean,
-  // Community-specific properties
-  heuristicLabel?: string,
-  cohesion?: number,
-  symbolCount?: number,
-  keywords?: string[],
-  description?: string,
-  enrichedBy?: 'heuristic' | 'llm',
-  // Process-specific properties
-  processType?: 'intra_community' | 'cross_community',
-  stepCount?: number,
-  communities?: string[],
-  entryPointId?: string,
-  terminalId?: string,
-  // Entry point scoring (computed by process detection)
-  entryPointScore?: number,
-  entryPointReason?: string,
-}
-
-export type RelationshipType = 
-  | 'CONTAINS' 
-  | 'CALLS' 
-  | 'INHERITS' 
-  | 'OVERRIDES' 
-  | 'IMPORTS'
-  | 'USES'
-  | 'DEFINES'
-  | 'DECORATES'
-  | 'IMPLEMENTS'
-  | 'EXTENDS'
-  | 'HAS_METHOD'
-  | 'HAS_PROPERTY'
-  | 'ACCESSES'
-  | 'MEMBER_OF'
-  | 'STEP_IN_PROCESS'
-
-export interface GraphNode {
-  id:  string,
-  label: NodeLabel,
-  properties: NodeProperties,
-  /** Ontology Object Type (e.g. 'Function', 'Class', 'Community') */
-  objectType?: string,
-  /** Ontology Interfaces this type implements (e.g. ['Callable', 'CodeEntity']) */
-  interfaces?: string[],
-}
-
-export interface GraphRelationship {
-  id: string,
-  sourceId: string,
-  targetId: string,
-  type: RelationshipType,
-  /** Confidence score 0-1 (1.0 = certain, lower = uncertain resolution) */
-  confidence: number,
-  /** Resolution reason: 'import-resolved', 'same-file', 'fuzzy-global', or empty for non-CALLS */
-  reason: string,
-  /** Step number for STEP_IN_PROCESS relationships (1-indexed) */
-  step?: number,
-  /** Ontology Link Type (e.g. 'CALLS', 'EXTENDS') */
-  linkType?: string,
-  /** Ontology cardinality constraint (e.g. 'one-to-many', 'many-to-many') */
-  cardinality?: string,
-}
-
+// Web-specific: in-memory graph container (simpler than CLI version)
 export interface KnowledgeGraph {
-  nodes: GraphNode[],
-  relationships: GraphRelationship[],
-  nodeCount: number,
-  relationshipCount: number,
-  addNode: (node: GraphNode) => void,
-  addRelationship: (relationship: GraphRelationship) => void,
+  nodes: GraphNode[];
+  relationships: GraphRelationship[];
+  nodeCount: number;
+  relationshipCount: number;
+  addNode: (node: GraphNode) => void;
+  addRelationship: (relationship: GraphRelationship) => void;
 }

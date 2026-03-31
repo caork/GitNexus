@@ -1,6 +1,6 @@
 // gitnexus/src/core/ingestion/field-extractors/configs/rust.ts
 
-import { SupportedLanguages } from '../../../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 import type { FieldExtractionConfig } from '../generic.js';
 import { extractSimpleTypeName } from '../../type-extractors/shared.js';
 import { hasKeyword } from './helpers.js';
@@ -14,10 +14,7 @@ import { hasKeyword } from './helpers.js';
  */
 export const rustConfig: FieldExtractionConfig = {
   language: SupportedLanguages.Rust,
-  typeDeclarationNodes: [
-    'struct_item',
-    'enum_item',
-  ],
+  typeDeclarationNodes: ['struct_item', 'enum_item'],
   fieldNodeTypes: ['field_declaration'],
   bodyNodeTypes: ['field_declaration_list'],
   defaultVisibility: 'private',

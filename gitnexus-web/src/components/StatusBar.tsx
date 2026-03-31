@@ -20,15 +20,16 @@ export const StatusBar = () => {
   // Detect primary language
   const primaryLanguage = useMemo(() => {
     if (!graph) return null;
-    const languages = graph.nodes
-      .map(n => n.properties.language)
-      .filter(Boolean);
+    const languages = graph.nodes.map((n) => n.properties.language).filter(Boolean);
     if (languages.length === 0) return null;
 
-    const counts = languages.reduce((acc, lang) => {
-      acc[lang!] = (acc[lang!] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
+    const counts = languages.reduce(
+      (acc, lang) => {
+        acc[lang!] = (acc[lang!] || 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
 
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
   }, [graph]);
@@ -48,14 +49,14 @@ export const StatusBar = () => {
   }, [graph]);
 
   return (
-    <footer className="flex items-center justify-between px-5 py-2 bg-deep border-t border-dashed border-border-subtle text-[11px] text-text-muted">
+    <footer className="flex items-center justify-between border-t border-dashed border-border-subtle bg-deep px-5 py-2 text-[11px] text-text-muted">
       {/* Left - Status */}
       <div className="flex items-center gap-4">
         {progress && progress.phase !== 'complete' ? (
           <>
-            <div className="w-28 h-1 bg-elevated rounded-full overflow-hidden">
+            <div className="h-1 w-28 overflow-hidden rounded-full bg-elevated">
               <div
-                className="h-full bg-gradient-to-r from-accent to-node-interface rounded-full transition-all duration-300"
+                className="h-full rounded-full bg-gradient-to-r from-accent to-node-interface transition-all duration-300"
                 style={{ width: `${progress.percent}%` }}
               />
             </div>
@@ -63,7 +64,7 @@ export const StatusBar = () => {
           </>
         ) : (
           <div className="flex items-center gap-1.5" data-testid="status-ready">
-            <span className="w-1.5 h-1.5 bg-node-function rounded-full" />
+            <span className="h-1.5 w-1.5 rounded-full bg-node-function" />
             <span>Ready</span>
           </div>
         )}

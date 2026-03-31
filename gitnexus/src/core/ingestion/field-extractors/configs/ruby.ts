@@ -1,6 +1,6 @@
 // gitnexus/src/core/ingestion/field-extractors/configs/ruby.ts
 
-import { SupportedLanguages } from '../../../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 import type { FieldExtractionConfig } from '../generic.js';
 import type { SyntaxNode } from '../../utils/ast-helpers.js';
 
@@ -13,8 +13,11 @@ function extractAttrNames(node: SyntaxNode): string[] {
   const method = node.childForFieldName('method');
   if (!method) return [];
   const methodName = method.text;
-  if (methodName !== 'attr_accessor' && methodName !== 'attr_reader'
-    && methodName !== 'attr_writer') {
+  if (
+    methodName !== 'attr_accessor' &&
+    methodName !== 'attr_reader' &&
+    methodName !== 'attr_writer'
+  ) {
     return [];
   }
   const args = node.childForFieldName('arguments');

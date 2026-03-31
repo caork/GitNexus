@@ -1,9 +1,8 @@
-
-/* 
+/*
  * Tree-sitter queries for extracting code definitions.
- * 
+ *
  * Note: Different grammars (typescript vs tsx vs javascript) may have
- * slightly different node types. These queries are designed to be 
+ * slightly different node types. These queries are designed to be
  * compatible with the standard tree-sitter grammars.
  */
 
@@ -1147,7 +1146,7 @@ export const DART_QUERIES = `
       (type_identifier) @heritage.trait))) @heritage
 `;
 
-import { SupportedLanguages } from '../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 
 export const LANGUAGE_QUERIES: Record<SupportedLanguages, string> = {
   [SupportedLanguages.TypeScript]: TYPESCRIPT_QUERIES,

@@ -2,12 +2,14 @@
 
 import type { TypeEnvironment } from './type-env.js';
 import type { SymbolTable } from './symbol-table.js';
-import { SupportedLanguages } from '../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 
 /**
  * Visibility levels used across all supported languages.
  * - public / private / protected: universal modifiers
  * - internal: C#, Kotlin (assembly/module scope)
+ * - protected internal: C# (accessible by same assembly OR derived classes)
+ * - private protected: C# (accessible by derived classes within same assembly)
  * - package: Java (package-private, no keyword)
  * - fileprivate: Swift (file scope)
  * - open: Swift (subclassable across modules)
@@ -17,6 +19,8 @@ export type FieldVisibility =
   | 'private'
   | 'protected'
   | 'internal'
+  | 'protected internal'
+  | 'private protected'
   | 'package'
   | 'fileprivate'
   | 'open';

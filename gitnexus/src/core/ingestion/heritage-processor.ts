@@ -19,10 +19,10 @@ import { ASTCache } from './ast-cache.js';
 import Parser from 'tree-sitter';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { generateId } from '../../lib/utils.js';
-import { getLanguageFromFilename } from './utils/language-detection.js';
+import { getLanguageFromFilename } from 'gitnexus-shared';
 import { isVerboseIngestionEnabled } from './utils/verbose.js';
 import { yieldToEventLoop } from './utils/event-loop.js';
-import { SupportedLanguages } from '../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 import { getProvider } from './languages/index.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedHeritage } from './workers/parse-worker.js';
@@ -37,7 +37,8 @@ import { TIER_CONFIDENCE } from './resolution-context.js';
  *   - heritageDefaultEdge: 'IMPLEMENTS' causes all unresolved parents to map to IMPLEMENTS
  *   - All others: default EXTENDS
  */
-const resolveExtendsType = (
+/** Exported for implementor-map construction (C#/Java: `extends` rows in base_list may be interfaces). */
+export const resolveExtendsType = (
   parentName: string,
   currentFilePath: string,
   ctx: ResolutionContext,
@@ -81,12 +82,18 @@ const resolveHeritageId = (
   if (resolved && resolved.candidates.length > 0) {
     // For global with multiple candidates, refuse (a wrong edge is worse than no edge)
     if (resolved.tier === 'global' && resolved.candidates.length > 1) {
-      return { id: generateId(fallbackLabel, fallbackKey ?? name), confidence: TIER_CONFIDENCE['global'] };
+      return {
+        id: generateId(fallbackLabel, fallbackKey ?? name),
+        confidence: TIER_CONFIDENCE['global'],
+      };
     }
     return { id: resolved.candidates[0].nodeId, confidence: TIER_CONFIDENCE[resolved.tier] };
   }
   // Unresolved: use global-tier confidence as fallback
-  return { id: generateId(fallbackLabel, fallbackKey ?? name), confidence: TIER_CONFIDENCE['global'] };
+  return {
+    id: generateId(fallbackLabel, fallbackKey ?? name),
+    confidence: TIER_CONFIDENCE['global'],
+  };
 };
 
 export const processHeritage = async (
@@ -127,7 +134,9 @@ export const processHeritage = async (
     if (!tree) {
       // Use larger bufferSize for files > 32KB
       try {
-        tree = parser.parse(file.content, undefined, { bufferSize: getTreeSitterBufferSize(file.content.length) });
+        tree = parser.parse(file.content, undefined, {
+          bufferSize: getTreeSitterBufferSize(file.content.length),
+        });
       } catch (parseError) {
         // Skip files that can't be parsed
         continue;
@@ -148,9 +157,9 @@ export const processHeritage = async (
     }
 
     // 4. Process heritage matches
-    matches.forEach(match => {
+    matches.forEach((match) => {
       const captureMap: Record<string, any> = {};
-      match.captures.forEach(c => {
+      match.captures.forEach((c) => {
         captureMap[c.name] = c.node;
       });
 
@@ -167,9 +176,20 @@ export const processHeritage = async (
         const className = captureMap['heritage.class'].text;
         const parentClassName = captureMap['heritage.extends'].text;
 
-        const { type: relType, idPrefix } = resolveExtendsType(parentClassName, file.path, ctx, language);
+        const { type: relType, idPrefix } = resolveExtendsType(
+          parentClassName,
+          file.path,
+          ctx,
+          language,
+        );
 
-        const child = resolveHeritageId(className, file.path, ctx, 'Class', `${file.path}:${className}`);
+        const child = resolveHeritageId(
+          className,
+          file.path,
+          ctx,
+          'Class',
+          `${file.path}:${className}`,
+        );
         const parent = resolveHeritageId(parentClassName, file.path, ctx, idPrefix);
 
         if (child.id && parent.id && child.id !== parent.id) {
@@ -189,7 +209,13 @@ export const processHeritage = async (
         const className = captureMap['heritage.class'].text;
         const interfaceName = captureMap['heritage.implements'].text;
 
-        const cls = resolveHeritageId(className, file.path, ctx, 'Class', `${file.path}:${className}`);
+        const cls = resolveHeritageId(
+          className,
+          file.path,
+          ctx,
+          'Class',
+          `${file.path}:${className}`,
+        );
         const iface = resolveHeritageId(interfaceName, file.path, ctx, 'Interface');
 
         if (cls.id && iface.id) {
@@ -209,7 +235,13 @@ export const processHeritage = async (
         const structName = captureMap['heritage.class'].text;
         const traitName = captureMap['heritage.trait'].text;
 
-        const strct = resolveHeritageId(structName, file.path, ctx, 'Struct', `${file.path}:${structName}`);
+        const strct = resolveHeritageId(
+          structName,
+          file.path,
+          ctx,
+          'Struct',
+          `${file.path}:${structName}`,
+        );
         const trait = resolveHeritageId(traitName, file.path, ctx, 'Trait');
 
         if (strct.id && trait.id) {
@@ -231,7 +263,7 @@ export const processHeritage = async (
   if (skippedByLang && skippedByLang.size > 0) {
     for (const [lang, count] of skippedByLang.entries()) {
       console.warn(
-        `[ingestion] Skipped ${count} ${lang} file(s) in heritage processing — ${lang} parser not available.`
+        `[ingestion] Skipped ${count} ${lang} file(s) in heritage processing — ${lang} parser not available.`,
       );
     }
   }
@@ -260,9 +292,20 @@ export const processHeritageFromExtracted = async (
     if (h.kind === 'extends') {
       const fileLanguage = getLanguageFromFilename(h.filePath);
       if (!fileLanguage) continue;
-      const { type: relType, idPrefix } = resolveExtendsType(h.parentName, h.filePath, ctx, fileLanguage);
+      const { type: relType, idPrefix } = resolveExtendsType(
+        h.parentName,
+        h.filePath,
+        ctx,
+        fileLanguage,
+      );
 
-      const child = resolveHeritageId(h.className, h.filePath, ctx, 'Class', `${h.filePath}:${h.className}`);
+      const child = resolveHeritageId(
+        h.className,
+        h.filePath,
+        ctx,
+        'Class',
+        `${h.filePath}:${h.className}`,
+      );
       const parent = resolveHeritageId(h.parentName, h.filePath, ctx, idPrefix);
 
       if (child.id && parent.id && child.id !== parent.id) {
@@ -276,7 +319,13 @@ export const processHeritageFromExtracted = async (
         });
       }
     } else if (h.kind === 'implements') {
-      const cls = resolveHeritageId(h.className, h.filePath, ctx, 'Class', `${h.filePath}:${h.className}`);
+      const cls = resolveHeritageId(
+        h.className,
+        h.filePath,
+        ctx,
+        'Class',
+        `${h.filePath}:${h.className}`,
+      );
       const iface = resolveHeritageId(h.parentName, h.filePath, ctx, 'Interface');
 
       if (cls.id && iface.id) {
@@ -289,8 +338,19 @@ export const processHeritageFromExtracted = async (
           reason: '',
         });
       }
-    } else if (h.kind === 'trait-impl' || h.kind === 'include' || h.kind === 'extend' || h.kind === 'prepend') {
-      const strct = resolveHeritageId(h.className, h.filePath, ctx, 'Struct', `${h.filePath}:${h.className}`);
+    } else if (
+      h.kind === 'trait-impl' ||
+      h.kind === 'include' ||
+      h.kind === 'extend' ||
+      h.kind === 'prepend'
+    ) {
+      const strct = resolveHeritageId(
+        h.className,
+        h.filePath,
+        ctx,
+        'Struct',
+        `${h.filePath}:${h.className}`,
+      );
       const trait = resolveHeritageId(h.parentName, h.filePath, ctx, 'Trait');
 
       if (strct.id && trait.id) {
@@ -308,3 +368,91 @@ export const processHeritageFromExtracted = async (
 
   onProgress?.(total, total);
 };
+
+/**
+ * Walk source files with the same heritage captures as parse-worker, producing
+ * {@link ExtractedHeritage} rows without mutating the graph. Used on the
+ * sequential pipeline path so `buildImplementorMap(..., ctx)` can run before
+ * `processCalls` (worker path defers calls until heritage from all chunks exists).
+ */
+export async function extractExtractedHeritageFromFiles(
+  files: { path: string; content: string }[],
+  astCache: ASTCache,
+): Promise<ExtractedHeritage[]> {
+  const parser = await loadParser();
+  const out: ExtractedHeritage[] = [];
+
+  for (const file of files) {
+    const language = getLanguageFromFilename(file.path);
+    if (!language || !isLanguageAvailable(language)) continue;
+
+    const provider = getProvider(language);
+    const queryStr = provider.treeSitterQueries;
+    if (!queryStr) continue;
+
+    await loadLanguage(language, file.path);
+
+    let tree = astCache.get(file.path);
+    if (!tree) {
+      try {
+        tree = parser.parse(file.content, undefined, {
+          bufferSize: getTreeSitterBufferSize(file.content.length),
+        });
+      } catch {
+        continue;
+      }
+      astCache.set(file.path, tree);
+    }
+
+    let matches;
+    try {
+      const lang = parser.getLanguage();
+      const query = new Parser.Query(lang, queryStr);
+      matches = query.matches(tree.rootNode);
+    } catch {
+      continue;
+    }
+
+    for (const match of matches) {
+      const captureMap: Record<string, any> = {};
+      match.captures.forEach((c) => {
+        captureMap[c.name] = c.node;
+      });
+
+      if (captureMap['heritage.class']) {
+        if (captureMap['heritage.extends']) {
+          const extendsNode = captureMap['heritage.extends'];
+          const fieldDecl = extendsNode.parent;
+          const isNamedField =
+            fieldDecl?.type === 'field_declaration' && fieldDecl.childForFieldName('name');
+          if (!isNamedField) {
+            out.push({
+              filePath: file.path,
+              className: captureMap['heritage.class'].text,
+              parentName: captureMap['heritage.extends'].text,
+              kind: 'extends',
+            });
+          }
+        }
+        if (captureMap['heritage.implements']) {
+          out.push({
+            filePath: file.path,
+            className: captureMap['heritage.class'].text,
+            parentName: captureMap['heritage.implements'].text,
+            kind: 'implements',
+          });
+        }
+        if (captureMap['heritage.trait']) {
+          out.push({
+            filePath: file.path,
+            className: captureMap['heritage.class'].text,
+            parentName: captureMap['heritage.trait'].text,
+            kind: 'trait-impl',
+          });
+        }
+      }
+    }
+  }
+
+  return out;
+}

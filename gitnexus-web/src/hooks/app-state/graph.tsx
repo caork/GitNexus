@@ -1,12 +1,11 @@
 import { createContext, useContext, useCallback, useMemo, useState, ReactNode } from 'react';
-import type { KnowledgeGraph, GraphNode, NodeLabel } from '../../core/graph/types';
+import type { GraphNode, NodeLabel } from 'gitnexus-shared';
+import type { KnowledgeGraph } from '../../core/graph/types';
 import { DEFAULT_VISIBLE_LABELS, DEFAULT_VISIBLE_EDGES, type EdgeType } from '../../lib/constants';
 
 interface GraphStateContextValue {
   graph: KnowledgeGraph | null;
   setGraph: (graph: KnowledgeGraph | null) => void;
-  fileContents: Map<string, string>;
-  setFileContents: (contents: Map<string, string>) => void;
   selectedNode: GraphNode | null;
   setSelectedNode: (node: GraphNode | null) => void;
   visibleLabels: NodeLabel[];
@@ -23,7 +22,6 @@ const GraphStateContext = createContext<GraphStateContextValue | null>(null);
 
 export const GraphStateProvider = ({ children }: { children: ReactNode }) => {
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
-  const [fileContents, setFileContents] = useState<Map<string, string>>(new Map());
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [visibleLabels, setVisibleLabels] = useState<NodeLabel[]>(DEFAULT_VISIBLE_LABELS);
   const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<EdgeType[]>(DEFAULT_VISIBLE_EDGES);
@@ -31,39 +29,36 @@ export const GraphStateProvider = ({ children }: { children: ReactNode }) => {
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<Set<string>>(new Set());
 
   const toggleLabelVisibility = useCallback((label: NodeLabel) => {
-    setVisibleLabels(prev =>
-      prev.includes(label) ? prev.filter(l => l !== label) : [...prev, label]
+    setVisibleLabels((prev) =>
+      prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label],
     );
   }, []);
 
   const toggleEdgeVisibility = useCallback((edgeType: EdgeType) => {
-    setVisibleEdgeTypes(prev =>
-      prev.includes(edgeType) ? prev.filter(e => e !== edgeType) : [...prev, edgeType]
+    setVisibleEdgeTypes((prev) =>
+      prev.includes(edgeType) ? prev.filter((e) => e !== edgeType) : [...prev, edgeType],
     );
   }, []);
 
-  const value = useMemo<GraphStateContextValue>(() => ({
-    graph,
-    setGraph,
-    fileContents,
-    setFileContents,
-    selectedNode,
-    setSelectedNode,
-    visibleLabels,
-    toggleLabelVisibility,
-    visibleEdgeTypes,
-    toggleEdgeVisibility,
-    depthFilter,
-    setDepthFilter,
-    highlightedNodeIds,
-    setHighlightedNodeIds,
-  }), [graph, fileContents, selectedNode, visibleLabels, visibleEdgeTypes, depthFilter, highlightedNodeIds]);
-
-  return (
-    <GraphStateContext.Provider value={value}>
-      {children}
-    </GraphStateContext.Provider>
+  const value = useMemo<GraphStateContextValue>(
+    () => ({
+      graph,
+      setGraph,
+      selectedNode,
+      setSelectedNode,
+      visibleLabels,
+      toggleLabelVisibility,
+      visibleEdgeTypes,
+      toggleEdgeVisibility,
+      depthFilter,
+      setDepthFilter,
+      highlightedNodeIds,
+      setHighlightedNodeIds,
+    }),
+    [graph, selectedNode, visibleLabels, visibleEdgeTypes, depthFilter, highlightedNodeIds],
   );
+
+  return <GraphStateContext.Provider value={value}>{children}</GraphStateContext.Provider>;
 };
 
 export const useGraphState = (): GraphStateContextValue => {

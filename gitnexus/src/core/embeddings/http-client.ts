@@ -210,7 +210,7 @@ const httpEmbedBatch = async (
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({ input: batch, model }),
     });
@@ -226,25 +226,21 @@ const httpEmbedBatch = async (
     // DNS, connection errors — retry with backoff
     if (attempt < HTTP_MAX_RETRIES) {
       const delay = HTTP_RETRY_BACKOFF_MS * (attempt + 1);
-      await new Promise(r => setTimeout(r, delay));
+      await new Promise((r) => setTimeout(r, delay));
       return httpEmbedBatch(url, batch, model, apiKey, batchIndex, attempt + 1);
     }
     const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Embedding request failed (${safeUrl(url)}, batch ${batchIndex}): ${reason}`,
-    );
+    throw new Error(`Embedding request failed (${safeUrl(url)}, batch ${batchIndex}): ${reason}`);
   }
 
   if (!resp.ok) {
     const status = resp.status;
     if ((status === 429 || status >= 500) && attempt < HTTP_MAX_RETRIES) {
       const delay = HTTP_RETRY_BACKOFF_MS * (attempt + 1);
-      await new Promise(r => setTimeout(r, delay));
+      await new Promise((r) => setTimeout(r, delay));
       return httpEmbedBatch(url, batch, model, apiKey, batchIndex, attempt + 1);
     }
-    throw new Error(
-      `Embedding endpoint returned ${status} (${safeUrl(url)}, batch ${batchIndex})`,
-    );
+    throw new Error(`Embedding endpoint returned ${status} (${safeUrl(url)}, batch ${batchIndex})`);
   }
 
   const data = (await resp.json()) as { data: EmbeddingItem[] };
@@ -275,7 +271,7 @@ export const httpEmbed = async (texts: string[]): Promise<Float32Array[]> => {
     if (items.length !== batch.length) {
       throw new Error(
         `Embedding endpoint returned ${items.length} vectors for ${batch.length} texts ` +
-        `(${safeUrl(url)}, batch ${batchIndex})`,
+          `(${safeUrl(url)}, batch ${batchIndex})`,
       );
     }
 
@@ -290,7 +286,7 @@ export const httpEmbed = async (texts: string[]): Promise<Float32Array[]> => {
           : `Set GITNEXUS_EMBEDDING_DIMS=${vec.length} to match your model output.`;
         throw new Error(
           `Embedding dimension mismatch: endpoint returned ${vec.length}d vector, ` +
-          `but expected ${expected}d. ${hint}`,
+            `but expected ${expected}d. ${hint}`,
         );
       }
 
@@ -328,7 +324,7 @@ export const httpEmbedQuery = async (text: string): Promise<number[]> => {
       : `Set GITNEXUS_EMBEDDING_DIMS=${embedding.length} to match your model output.`;
     throw new Error(
       `Embedding dimension mismatch: endpoint returned ${embedding.length}d vector, ` +
-      `but expected ${expected}d. ${hint}`,
+        `but expected ${expected}d. ${hint}`,
     );
   }
   return embedding;

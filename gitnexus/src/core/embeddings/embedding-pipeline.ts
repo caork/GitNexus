@@ -1,6 +1,6 @@
 /**
  * Embedding Pipeline Module
- * 
+ *
  * Orchestrates the background embedding process:
  * 1. Query embeddable nodes from LadybugDB
  * 2. Generate text representations
@@ -32,15 +32,15 @@ export type EmbeddingProgressCallback = (progress: EmbeddingProgress) => void;
  * Uses table-specific queries (File has different schema than code elements)
  */
 const queryEmbeddableNodes = async (
-  executeQuery: (cypher: string) => Promise<any[]>
+  executeQuery: (cypher: string) => Promise<any[]>,
 ): Promise<EmbeddableNode[]> => {
   const allNodes: EmbeddableNode[] = [];
-  
+
   // Query each embeddable table with table-specific columns
   for (const label of EMBEDDABLE_LABELS) {
     try {
       let query: string;
-      
+
       if (label === 'File') {
         // File nodes don't have startLine/endLine
         query = `
@@ -57,7 +57,7 @@ const queryEmbeddableNodes = async (
                  n.startLine AS startLine, n.endLine AS endLine
         `;
       }
-      
+
       const rows = await executeQuery(query);
       for (const row of rows) {
         allNodes.push({
@@ -89,13 +89,13 @@ const queryEmbeddableNodes = async (
 const batchInsertEmbeddings = async (
   executeWithReusedStatement: (
     cypher: string,
-    paramsList: Array<Record<string, any>>
+    paramsList: Array<Record<string, any>>,
   ) => Promise<void>,
-  updates: Array<{ id: string; embedding: number[] }>
+  updates: Array<{ id: string; embedding: number[] }>,
 ): Promise<void> => {
   // INSERT into separate embedding table - much more memory efficient!
   const cypher = `CREATE (e:CodeEmbedding {nodeId: $nodeId, embedding: $embedding})`;
-  const paramsList = updates.map(u => ({ nodeId: u.id, embedding: u.embedding }));
+  const paramsList = updates.map((u) => ({ nodeId: u.id, embedding: u.embedding }));
   await executeWithReusedStatement(cypher, paramsList);
 };
 
@@ -106,7 +106,7 @@ const batchInsertEmbeddings = async (
 let vectorExtensionLoaded = false;
 
 const createVectorIndex = async (
-  executeQuery: (cypher: string) => Promise<any[]>
+  executeQuery: (cypher: string) => Promise<any[]>,
 ): Promise<void> => {
   // LadybugDB v0.15+ requires explicit VECTOR extension loading (once per session)
   if (!vectorExtensionLoaded) {
@@ -136,7 +136,7 @@ const createVectorIndex = async (
 
 /**
  * Run the embedding pipeline
- * 
+ *
  * @param executeQuery - Function to execute Cypher queries against LadybugDB
  * @param executeWithReusedStatement - Function to execute with reused prepared statement
  * @param onProgress - Callback for progress updates
@@ -145,7 +145,10 @@ const createVectorIndex = async (
  */
 export const runEmbeddingPipeline = async (
   executeQuery: (cypher: string) => Promise<any[]>,
-  executeWithReusedStatement: (cypher: string, paramsList: Array<Record<string, any>>) => Promise<void>,
+  executeWithReusedStatement: (
+    cypher: string,
+    paramsList: Array<Record<string, any>>,
+  ) => Promise<void>,
   onProgress: EmbeddingProgressCallback,
   config: Partial<EmbeddingConfig> = {},
   skipNodeIds?: Set<string>,
@@ -184,9 +187,11 @@ export const runEmbeddingPipeline = async (
     // Incremental mode: filter out nodes that already have embeddings
     if (skipNodeIds && skipNodeIds.size > 0) {
       const beforeCount = nodes.length;
-      nodes = nodes.filter(n => !skipNodeIds.has(n.id));
+      nodes = nodes.filter((n) => !skipNodeIds.has(n.id));
       if (isDev) {
-        console.log(`📦 Incremental embeddings: ${beforeCount} total, ${skipNodeIds.size} cached, ${nodes.length} to embed`);
+        console.log(
+          `📦 Incremental embeddings: ${beforeCount} total, ${skipNodeIds.size} cached, ${nodes.length} to embed`,
+        );
       }
     }
 
@@ -242,7 +247,7 @@ export const runEmbeddingPipeline = async (
       processedNodes += batch.length;
 
       // Report progress (20-90% for embedding phase)
-      const embeddingProgress = 20 + ((processedNodes / totalNodes) * 70);
+      const embeddingProgress = 20 + (processedNodes / totalNodes) * 70;
       onProgress({
         phase: 'embedding',
         percent: Math.round(embeddingProgress),
@@ -280,7 +285,7 @@ export const runEmbeddingPipeline = async (
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    
+
     if (isDev) {
       console.error('❌ Embedding pipeline error:', error);
     }
@@ -297,9 +302,9 @@ export const runEmbeddingPipeline = async (
 
 /**
  * Perform semantic search using the vector index
- * 
+ *
  * Uses CodeEmbedding table and queries each node table to get metadata
- * 
+ *
  * @param executeQuery - Function to execute Cypher queries
  * @param query - Search query text
  * @param k - Number of results to return (default: 10)
@@ -310,7 +315,7 @@ export const semanticSearch = async (
   executeQuery: (cypher: string) => Promise<any[]>,
   query: string,
   k: number = 10,
-  maxDistance: number = 0.5
+  maxDistance: number = 0.5,
 ): Promise<SemanticSearchResult[]> => {
   if (!isEmbedderReady()) {
     throw new Error('Embedding model not initialized. Run embedding pipeline first.');
@@ -333,7 +338,7 @@ export const semanticSearch = async (
   `;
 
   const embResults = await executeQuery(vectorQuery);
-  
+
   if (embResults.length === 0) {
     return [];
   }
@@ -353,7 +358,7 @@ export const semanticSearch = async (
   const results: SemanticSearchResult[] = [];
 
   for (const [label, items] of byLabel) {
-    const idList = items.map(i => `'${i.nodeId.replace(/'/g, "''")}'`).join(', ');
+    const idList = items.map((i) => `'${i.nodeId.replace(/'/g, "''")}'`).join(', ');
     try {
       let nodeQuery: string;
       if (label === 'File') {
@@ -401,11 +406,11 @@ export const semanticSearch = async (
 
 /**
  * Semantic search with graph expansion (flattened results)
- * 
+ *
  * Note: With multi-table schema, graph traversal is simplified.
  * Returns semantic matches with their metadata.
  * For full graph traversal, use execute_vector_cypher tool directly.
- * 
+ *
  * @param executeQuery - Function to execute Cypher queries
  * @param query - Search query text
  * @param k - Number of initial semantic matches (default: 5)
@@ -416,13 +421,13 @@ export const semanticSearchWithContext = async (
   executeQuery: (cypher: string) => Promise<any[]>,
   query: string,
   k: number = 5,
-  _hops: number = 1
+  _hops: number = 1,
 ): Promise<any[]> => {
   // For multi-table schema, just return semantic search results
   // Graph traversal is complex with separate tables - use execute_vector_cypher instead
   const results = await semanticSearch(executeQuery, query, k, 0.5);
-  
-  return results.map(r => ({
+
+  return results.map((r) => ({
     matchId: r.nodeId,
     matchName: r.name,
     matchLabel: r.label,
@@ -434,4 +439,3 @@ export const semanticSearchWithContext = async (
     relationType: null,
   }));
 };
-

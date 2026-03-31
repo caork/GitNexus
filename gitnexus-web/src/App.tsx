@@ -9,10 +9,17 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { StatusBar } from './components/StatusBar';
 import { FileTreePanel } from './components/FileTreePanel';
 import { CodeReferencesPanel } from './components/CodeReferencesPanel';
-import { FileEntry } from './services/zip';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
-import { connectToServer, fetchRepos, normalizeServerUrl, type ConnectToServerResult } from './services/server-connection';
+import {
+  connectToServer,
+  fetchRepos,
+  normalizeServerUrl,
+  connectHeartbeat,
+  BackendError,
+  type ConnectResult,
+  type BackendRepo,
+} from './services/backend-client';
 import { ERROR_RESET_DELAY_MS } from './config/ui-constants';
 
 const AppContent = () => {
@@ -20,13 +27,10 @@ const AppContent = () => {
     viewMode,
     setViewMode,
     setGraph,
-    setFileContents,
     setProgress,
     setProjectName,
     progress,
     isRightPanelOpen,
-    runPipeline,
-    runPipelineFromFiles,
     isSettingsPanelOpen,
     setSettingsPanelOpen,
     refreshLLMSettings,
@@ -41,7 +45,6 @@ const AppContent = () => {
     availableRepos,
     setAvailableRepos,
     switchRepo,
-    loadServerGraph,
     isAddRepoOpen,
     setAddRepoOpen,
   } = useAppState();
@@ -52,132 +55,39 @@ const AppContent = () => {
   // When true, auto-connect will NOT override locally loaded data.
   const localDataLoadedRef = useRef(false);
 
-  const handleFileSelect = useCallback(async (file: File) => {
-    localDataLoadedRef.current = true; // Mark: user chose local upload
-    const projectName = file.name.replace('.zip', '');
-    setProjectName(projectName);
-    setProgress({ phase: 'extracting', percent: 0, message: 'Starting...', detail: 'Preparing to extract files' });
-    setViewMode('loading');
+  const handleServerConnect = useCallback(
+    async (result: ConnectResult): Promise<void> => {
+      // Extract project name from repoPath
+      const repoPath = result.repoInfo.repoPath ?? result.repoInfo.path;
+      const parts = (repoPath || '').split('/').filter((p) => p && !p.startsWith('.'));
+      const projectName = parts[parts.length - 1] || parts[0] || 'server-project';
+      setProjectName(projectName);
 
-    try {
-      const result = await runPipeline(file, (progress) => {
-        setProgress(progress);
-      });
+      // Build KnowledgeGraph from server data for visualization
+      const graph = createKnowledgeGraph();
+      for (const node of result.nodes) {
+        graph.addNode(node);
+      }
+      for (const rel of result.relationships) {
+        graph.addRelationship(rel);
+      }
+      setGraph(graph);
 
-      setGraph(result.graph);
-      setFileContents(result.fileContents);
+      // Transition directly to exploring view
       setViewMode('exploring');
 
-      // Initialize (or re-initialize) the agent AFTER a repo loads so it captures
-      // the current codebase context (file contents + graph tools) in the worker.
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-
-      // Auto-start embeddings pipeline in background
-      // Uses WebGPU if available, falls back to WASM
-      startEmbeddingsWithFallback();
-    } catch (error) {
-      console.error('Pipeline error:', error);
-      setProgress({
-        phase: 'error',
-        percent: 0,
-        message: 'Error processing file',
-        detail: error instanceof Error ? error.message : 'Unknown error',
-      });
-      setTimeout(() => {
-        setViewMode('onboarding');
-        setProgress(null);
-      }, ERROR_RESET_DELAY_MS);
-    }
-  }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipeline, startEmbeddingsWithFallback, initializeAgent]);
-
-  const handleGitClone = useCallback(async (files: FileEntry[], repoName?: string) => {
-    localDataLoadedRef.current = true; // Mark: user chose local upload
-    let projectName = repoName;
-    if (!projectName) {
-      const firstPath = files[0]?.path || 'repository';
-      projectName = firstPath.split('/')[0].replace(/-\d+$/, '') || 'repository';
-    }
-
-    setProjectName(projectName);
-    setProgress({ phase: 'extracting', percent: 0, message: 'Starting...', detail: 'Preparing to process files' });
-    setViewMode('loading');
-
-    try {
-      const result = await runPipelineFromFiles(files, (progress) => {
-        setProgress(progress);
-      });
-
-      setGraph(result.graph);
-      setFileContents(result.fileContents);
-      setViewMode('exploring');
-
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-
-      startEmbeddingsWithFallback();
-    } catch (error) {
-      console.error('Pipeline error:', error);
-      setProgress({
-        phase: 'error',
-        percent: 0,
-        message: 'Error processing repository',
-        detail: error instanceof Error ? error.message : 'Unknown error',
-      });
-      setTimeout(() => {
-        setViewMode('onboarding');
-        setProgress(null);
-      }, ERROR_RESET_DELAY_MS);
-    }
-  }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddingsWithFallback, initializeAgent]);
-
-  const handleServerConnect = useCallback((result: ConnectToServerResult): Promise<void> => {
-    // Extract project name from repoPath
-    const repoPath = result.repoInfo.repoPath;
-    const parts = repoPath.split('/').filter(p => p && !p.startsWith('.'));
-    const projectName = parts[parts.length - 1] || parts[0] || 'server-project';
-    setProjectName(projectName);
-
-    // Build KnowledgeGraph from server data for visualization
-    const graph = createKnowledgeGraph();
-    for (const node of result.nodes) {
-      graph.addNode(node);
-    }
-    for (const rel of result.relationships) {
-      graph.addRelationship(rel);
-    }
-    setGraph(graph);
-
-    // Set file contents from extracted File node content
-    const fileMap = new Map<string, string>();
-    for (const [path, content] of Object.entries(result.fileContents)) {
-      fileMap.set(path, content);
-    }
-    setFileContents(fileMap);
-
-    // Transition directly to exploring view
-    setViewMode('exploring');
-
-    // Load graph into LadybugDB (in-browser WASM database) for Nexus AI queries,
-    // then initialize agent once the database is ready
-    const loadGraphPromise = loadServerGraph(result.nodes, result.relationships, result.fileContents)
-      .then(() => {
+      // Initialize agent with backend queries, then start embeddings
+      try {
         if (getActiveProviderConfig()) {
-          return initializeAgent(projectName);
+          await initializeAgent(projectName);
         }
-      })
-      .then(() => {
         startEmbeddingsWithFallback();
-      })
-      .catch((err) => {
-        console.warn('Failed to load graph into LadybugDB:', err);
-        // Agent won't work but graph visualization still does
-      });
-
-    return loadGraphPromise;
-  }, [setViewMode, setGraph, setFileContents, setProjectName, loadServerGraph, initializeAgent, startEmbeddingsWithFallback]);
+      } catch (err) {
+        console.warn('Failed to initialize agent:', err);
+      }
+    },
+    [setViewMode, setGraph, setProjectName, initializeAgent, startEmbeddingsWithFallback],
+  );
 
   // Auto-connect: detect server via /api/health (same origin or ?server param).
   // On refresh, reads repo name from URL hash (#repo=Name) to restore session.
@@ -263,13 +173,32 @@ const AppContent = () => {
     initializeAgent();
   }, [refreshLLMSettings, initializeAgent]);
 
+  // ── Server heartbeat: detect when server goes down while exploring ────────
+  // Uses SSE (EventSource) for instant detection — no polling delay.
+  useEffect(() => {
+    if (viewMode !== 'exploring') return;
+
+    const cleanup = connectHeartbeat(
+      () => {}, // onConnect — already connected, no action needed
+      () => {
+        // Server went down — return to onboarding
+        setViewMode('onboarding');
+        setGraph(null);
+        setProgress(null);
+      },
+    );
+
+    return cleanup;
+  }, [viewMode, setViewMode, setGraph, setProgress]);
+
   // Render based on view mode
   if (viewMode === 'onboarding') {
     return (
       <DropZone
-        onFileSelect={handleFileSelect}
-        onGitClone={handleGitClone}
         onServerConnect={async (result, serverUrl) => {
+          // Refresh repo list before transitioning so it's ready in the header
+          const repos = await fetchRepos().catch(() => [] as BackendRepo[]);
+          setAvailableRepos(repos);
           await handleServerConnect(result);
           setProgress(null);
           if (serverUrl) {
@@ -298,20 +227,54 @@ const AppContent = () => {
 
   // Exploring view
   return (
-    <div className="flex flex-col h-screen bg-void overflow-hidden">
-      <Header onFocusNode={handleFocusNode} availableRepos={availableRepos} onSwitchRepo={switchRepo} />
+    <div className="flex h-screen flex-col overflow-hidden bg-void">
+      <Header
+        onFocusNode={handleFocusNode}
+        availableRepos={availableRepos}
+        onSwitchRepo={switchRepo}
+        onReposChanged={(repos) => setAvailableRepos(repos)}
+        onAnalyzeComplete={async (repoName) => {
+          // A new repo was just indexed via the header dropdown.
+          // Refresh the repo list, connect to the new repo, and switch to it.
+          // Retry once after 1s if the repo isn't found yet (server may still
+          // be reinitializing after the worker completed).
+          const url = serverBaseUrl ?? 'http://localhost:4747';
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const repos = await fetchRepos();
+              setAvailableRepos(repos);
+              const result = await connectToServer(url, undefined, undefined, repoName);
+              await handleServerConnect(result);
+              setServerBaseUrl(normalizeServerUrl(url));
+              setProgress(null);
+              return;
+            } catch (err: unknown) {
+              if (attempt === 0 && err instanceof BackendError && err.status === 404) {
+                // Server may still be reinitializing — wait and retry
+                await new Promise((r) => setTimeout(r, 1500));
+                continue;
+              }
+              console.error('Failed to connect after analyze:', err);
+              fetchRepos()
+                .then((repos) => setAvailableRepos(repos))
+                .catch(() => {});
+              return;
+            }
+          }
+        }}
+      />
 
-      <main className="flex-1 flex min-h-0">
+      <main className="flex min-h-0 flex-1">
         {/* Left Panel - File Tree */}
         <FileTreePanel onFocusNode={handleFocusNode} />
 
         {/* Graph area - takes remaining space */}
-        <div className="flex-1 relative min-w-0">
+        <div className="relative min-w-0 flex-1">
           <GraphCanvas ref={graphCanvasRef} />
 
           {/* Code References Panel (overlay) - does NOT resize the graph, it overlaps on top */}
           {isCodePanelOpen && (codeReferences.length > 0 || !!selectedNode) && (
-            <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
+            <div className="pointer-events-auto absolute inset-y-0 left-0 z-30">
               <CodeReferencesPanel onFocusNode={handleFocusNode} />
             </div>
           )}
@@ -341,14 +304,6 @@ const AppContent = () => {
             ✕
           </button>
           <DropZone
-            onFileSelect={async (file) => {
-              setAddRepoOpen(false);
-              await handleFileSelect(file);
-            }}
-            onGitClone={async (files, repoName) => {
-              setAddRepoOpen(false);
-              await handleGitClone(files, repoName);
-            }}
             onServerConnect={async (result, serverUrl) => {
               setAddRepoOpen(false);
               await handleServerConnect(result);

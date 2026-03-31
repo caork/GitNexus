@@ -10,7 +10,7 @@
  *   - namedBindingExtractor: present (from X import Y)
  */
 
-import { SupportedLanguages } from '../../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 import { defineLanguage } from '../language-provider.js';
 import { typeConfig as pythonConfig } from '../type-extractors/python.js';
 import { pythonExportChecker } from '../export-detection.js';
@@ -21,10 +21,33 @@ import { createFieldExtractor } from '../field-extractors/generic.js';
 import { pythonConfig as pythonFieldConfig } from '../field-extractors/configs/python.js';
 
 const BUILT_INS: ReadonlySet<string> = new Set([
-  'print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple',
-  'append', 'extend', 'update',
-  'type', 'isinstance', 'issubclass', 'getattr', 'setattr', 'hasattr',
-  'enumerate', 'zip', 'sorted', 'reversed', 'min', 'max', 'sum', 'abs',
+  'print',
+  'len',
+  'range',
+  'str',
+  'int',
+  'float',
+  'list',
+  'dict',
+  'set',
+  'tuple',
+  'append',
+  'extend',
+  'update',
+  'type',
+  'isinstance',
+  'issubclass',
+  'getattr',
+  'setattr',
+  'hasattr',
+  'enumerate',
+  'zip',
+  'sorted',
+  'reversed',
+  'min',
+  'max',
+  'sum',
+  'abs',
 ]);
 
 export const pythonProvider = defineLanguage({

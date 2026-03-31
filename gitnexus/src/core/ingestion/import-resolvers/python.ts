@@ -4,7 +4,7 @@
  */
 
 import { tryResolveWithExtensions } from './utils.js';
-import { SupportedLanguages } from '../../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 import type { ImportResult, ResolveCtx } from './types.js';
 import { resolveStandard } from './standard.js';
 
@@ -55,7 +55,8 @@ export function resolvePythonImportInternal(
   const importerDir = currentFile.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
   if (!importerDir) return null;
 
-  if (allFiles.has(`${importerDir}/${pathLike}/__init__.py`)) return `${importerDir}/${pathLike}/__init__.py`;
+  if (allFiles.has(`${importerDir}/${pathLike}/__init__.py`))
+    return `${importerDir}/${pathLike}/__init__.py`;
   if (allFiles.has(`${importerDir}/${pathLike}.py`)) return `${importerDir}/${pathLike}.py`;
 
   // Ancestor directory walk — Python resolves bare imports against sys.path entries,

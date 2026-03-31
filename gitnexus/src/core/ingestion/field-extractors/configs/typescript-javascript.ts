@@ -1,6 +1,6 @@
 // gitnexus/src/core/ingestion/field-extractors/configs/typescript-javascript.ts
 
-import { SupportedLanguages } from '../../../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 import type { FieldExtractionConfig } from '../generic.js';
 import { hasKeyword, findVisibility, typeFromAnnotation } from './helpers.js';
 import type { FieldVisibility } from '../../field-types.js';
@@ -13,11 +13,7 @@ const shared: Omit<FieldExtractionConfig, 'language'> = {
     'abstract_class_declaration',
     'interface_declaration',
   ],
-  fieldNodeTypes: [
-    'public_field_definition',
-    'property_signature',
-    'field_definition',
-  ],
+  fieldNodeTypes: ['public_field_definition', 'property_signature', 'field_definition'],
   bodyNodeTypes: ['class_body', 'interface_body', 'object_type'],
   defaultVisibility: 'public',
 

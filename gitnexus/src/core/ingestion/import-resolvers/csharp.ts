@@ -5,7 +5,7 @@
 
 import type { SuffixIndex } from './utils.js';
 import { suffixResolve } from './utils.js';
-import { SupportedLanguages } from '../../../config/supported-languages.js';
+import { SupportedLanguages } from 'gitnexus-shared';
 import type { ImportResult, ResolveCtx } from './types.js';
 import { resolveStandard } from './standard.js';
 import type { CSharpProjectConfig } from '../language-config.js';
@@ -37,7 +37,9 @@ export function resolveCSharpImportInternal(
     }
 
     const dirPrefix = config.projectDir
-      ? (relative ? config.projectDir + '/' + relative : config.projectDir)
+      ? relative
+        ? config.projectDir + '/' + relative
+        : config.projectDir
       : relative;
 
     // 1. Try as single file: relative.cs (e.g., "Models/DlqMessage.cs")
@@ -113,7 +115,9 @@ export function resolveCSharpNamespaceDir(
     }
 
     const dirPrefix = config.projectDir
-      ? (relative ? config.projectDir + '/' + relative : config.projectDir)
+      ? relative
+        ? config.projectDir + '/' + relative
+        : config.projectDir
       : relative;
 
     if (!dirPrefix) continue;
@@ -131,7 +135,13 @@ export function resolveCSharpImport(
 ): ImportResult {
   const csharpConfigs = ctx.configs.csharpConfigs;
   if (csharpConfigs.length > 0) {
-    const resolvedFiles = resolveCSharpImportInternal(rawImportPath, csharpConfigs, ctx.normalizedFileList, ctx.allFileList, ctx.index);
+    const resolvedFiles = resolveCSharpImportInternal(
+      rawImportPath,
+      csharpConfigs,
+      ctx.normalizedFileList,
+      ctx.allFileList,
+      ctx.index,
+    );
     if (resolvedFiles.length > 1) {
       const dirSuffix = resolveCSharpNamespaceDir(rawImportPath, csharpConfigs);
       if (dirSuffix) {
