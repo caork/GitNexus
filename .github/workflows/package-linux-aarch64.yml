@@ -1,0 +1,120 @@
+name: Package Linux aarch64
+
+on:
+  workflow_dispatch:          # run manually from GitHub UI
+    inputs:
+      version:
+        description: 'Release tag (e.g. v1.0.0). Leave blank to use commit SHA.'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm   # native Linux aarch64 runner
+    permissions:
+      contents: write           # needed to create/upload release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Install ─────────────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # Install all deps (both workspaces)
+      - name: Install dependencies
+        run: npm install
+
+      # ── Build ────────────────────────────────────────────────────────
+      - name: Build server (TypeScript → JS)
+        run: npm run build:server
+
+      - name: Build web UI
+        run: npm run build:web
+
+      # ── Prune dev dependencies ───────────────────────────────────────
+      # Remove devDependencies from server package before bundling
+      - name: Prune dev deps (server)
+        working-directory: gitnexus
+        run: npm prune --omit=dev
+
+      # ── Bundle ──────────────────────────────────────────────────────
+      - name: Create self-contained tarball
+        run: |
+          TAG="${{ github.event.inputs.version || github.sha }}"
+          BUNDLE="gitnexus-linux-aarch64-${TAG}"
+
+          mkdir -p "$BUNDLE/gitnexus-web"
+
+          # Server: dist + node_modules (production only) + package.json
+          cp -r gitnexus/dist         "$BUNDLE/gitnexus/"
+          cp -r gitnexus/node_modules "$BUNDLE/gitnexus/" 2>/dev/null || \
+            cp -r node_modules         "$BUNDLE/gitnexus/"
+          cp    gitnexus/package.json  "$BUNDLE/gitnexus/"
+
+          # Web UI: static files only (no node_modules needed at runtime)
+          cp -r gitnexus-web/dist     "$BUNDLE/gitnexus-web/"
+
+          # Scripts + root package.json
+          cp start.sh stop.sh package.json "$BUNDLE/"
+
+          # Make scripts executable
+          chmod +x "$BUNDLE/start.sh" "$BUNDLE/stop.sh"
+
+          # Write a small README into the bundle
+          cat > "$BUNDLE/README.txt" <<'EOF'
+          GitNexus — Linux aarch64 bundle
+
+          Requirements: Node.js >= 20
+
+          Setup:
+            1. Extract this archive on your offline machine
+            2. Index a repo (needs network only for this step):
+               node gitnexus/dist/cli/index.js analyze /path/to/repo
+            3. Start:
+               ./start.sh
+            4. Open: http://localhost:4747
+
+          Stop:
+            ./stop.sh
+
+          The web UI and API server both run on port 4747.
+          EOF
+
+          tar -czf "${BUNDLE}.tar.gz" "$BUNDLE"
+          echo "BUNDLE_FILE=${BUNDLE}.tar.gz" >> $GITHUB_ENV
+          echo "BUNDLE_TAG=${TAG}" >> $GITHUB_ENV
+
+      # ── Upload artifact (always available for download) ─────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitnexus-linux-aarch64
+          path: ${{ env.BUNDLE_FILE }}
+          retention-days: 30
+
+      # ── Create GitHub Release (only when version tag is given) ───────
+      - name: Create release
+        if: ${{ github.event.inputs.version != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: GitNexus ${{ github.event.inputs.version }} (Linux aarch64)
+          body: |
+            Self-contained Linux aarch64 bundle.
+
+            **No internet required on the target machine** — `node_modules` with
+            native Linux aarch64 binaries is included.
+
+            **Requirements:** Node.js >= 20 on the target machine.
+
+            **Usage:**
+            ```bash
+            tar -xzf gitnexus-linux-aarch64-*.tar.gz
+            cd gitnexus-linux-aarch64-*/
+            ./start.sh        # → http://localhost:4747
+            ```
+          files: ${{ env.BUNDLE_FILE }}
+          draft: false
+          prerelease: false
