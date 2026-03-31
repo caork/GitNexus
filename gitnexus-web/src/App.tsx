@@ -153,7 +153,7 @@ const AppContent = () => {
           window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`);
         }
 
-        fetchRepos(baseUrl)
+        fetchRepos()
           .then((repos) => setAvailableRepos(repos))
           .catch((e) => console.warn('Failed to fetch repo list:', e));
       })
@@ -212,7 +212,7 @@ const AppContent = () => {
               window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`);
             }
 
-            fetchRepos(baseUrl)
+            fetchRepos()
               .then((repos) => setAvailableRepos(repos))
               .catch((e) => console.warn('Failed to fetch repo list:', e));
           }
@@ -316,7 +316,7 @@ const AppContent = () => {
                 if (repoName) {
                   window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`);
                 }
-                fetchRepos(baseUrl)
+                fetchRepos()
                   .then((repos) => setAvailableRepos(repos))
                   .catch((e) => console.warn('Failed to fetch repo list:', e));
               }

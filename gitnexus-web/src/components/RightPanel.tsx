@@ -17,7 +17,7 @@ import { ToolCallCard } from './ToolCallCard';
 import { isProviderConfigured } from '../core/llm/settings-service';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ProcessesPanel } from './ProcessesPanel';
-import { fetchRepos } from '../services/server-connection';
+import { fetchRepos } from '../services/backend-client';
 export const RightPanel = () => {
   const {
     isRightPanelOpen,
@@ -54,7 +54,7 @@ export const RightPanel = () => {
     if (willOpen && serverBaseUrl) {
       setIsRefreshingRepos(true);
       try {
-        const repos = await fetchRepos(serverBaseUrl);
+        const repos = await fetchRepos();
         setAvailableRepos(repos);
       } catch (e) {
         console.warn('Failed to refresh repo list:', e);

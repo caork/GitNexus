@@ -34,16 +34,12 @@ export const StatusBar = () => {
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
   }, [graph]);
 
-  // Count nodes per ontology interface
+  // Count nodes per label
   const interfaceCounts = useMemo(() => {
     if (!graph) return null;
     const counts: Record<string, number> = {};
     for (const node of graph.nodes) {
-      if (node.interfaces && node.interfaces.length > 0) {
-        // Count by most specific interface (first non-CodeEntity)
-        const primary = node.interfaces.find(i => i !== 'CodeEntity') ?? node.interfaces[0];
-        counts[primary] = (counts[primary] || 0) + 1;
-      }
+      counts[node.label] = (counts[node.label] || 0) + 1;
     }
     return Object.keys(counts).length > 0 ? counts : null;
   }, [graph]);

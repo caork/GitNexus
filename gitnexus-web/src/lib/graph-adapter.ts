@@ -192,7 +192,7 @@ export const knowledgeGraphToGraphology = (
     const scaledSize = getScaledNodeSize(baseSize, nodeCount);
 
     // Structural nodes keep their type-based color (ontology: FileSystemEntry / ArchitecturalUnit)
-    const structColor = resolveNodeColor(node.label, node.interfaces);
+    const structColor = resolveNodeColor(node.label);
     graph.addNode(node.id, {
       x,
       y,
@@ -205,8 +205,8 @@ export const knowledgeGraphToGraphology = (
       endLine: node.properties.endLine,
       hidden: false,
       mass: getNodeMass(node.label, nodeCount),
-      objectType: node.objectType,
-      interfaces: node.interfaces,
+      
+      
     });
   });
 
@@ -256,7 +256,7 @@ export const knowledgeGraphToGraphology = (
     const usesCommunityColor = hasCommunity && symbolTypes.has(node.label);
     const nodeColor = usesCommunityColor
       ? getCommunityColor(communityIndex!)
-      : resolveNodeColor(node.label, node.interfaces);
+      : resolveNodeColor(node.label);
 
     graph.addNode(nodeId, {
       x,
@@ -272,8 +272,8 @@ export const knowledgeGraphToGraphology = (
       mass: getNodeMass(node.label, nodeCount),
       community: communityIndex,
       communityColor: hasCommunity ? getCommunityColor(communityIndex!) : undefined,
-      objectType: node.objectType,
-      interfaces: node.interfaces,
+      
+      
     });
   };
 

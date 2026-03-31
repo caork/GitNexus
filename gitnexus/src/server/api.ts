@@ -12,17 +12,19 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
-import { spawn, type ChildProcess } from 'child_process';
+import { fork, spawn, type ChildProcess } from 'child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { createRequire } from 'node:module';
 import { loadMeta, listRegisteredRepos, loadCLIConfig, saveCLIConfig, getStoragePath } from '../storage/repo-manager.js';
 import {
   executeQuery,
+  executePrepared,
   executeWithReusedStatement,
   closeLbug,
   withLbugDb,
 } from '../core/lbug/lbug-adapter.js';
 import { isWriteQuery } from '../mcp/core/lbug-adapter.js';
-import { NODE_TABLES } from '../core/lbug/schema.js';
-import { GraphNode, GraphRelationship } from '../core/graph/types.js';
+import { NODE_TABLES, type GraphNode, type GraphRelationship } from 'gitnexus-shared';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
 import { hybridSearch } from '../core/search/hybrid-search.js';
 // Embedding imports are lazy (dynamic import) — only needed when HTTP endpoint is configured
@@ -30,7 +32,11 @@ import { LocalBackend } from '../mcp/local/local-backend.js';
 import type { Backend } from '../mcp/backend.js';
 import { readResource } from '../mcp/resources.js';
 import { mountMCPEndpoints } from './mcp-http.js';
-import { createRequire } from 'module';
+import { JobManager } from './analyze-job.js';
+import { extractRepoName, getCloneDir, cloneOrPull } from './git-clone.js';
+
+const _require = createRequire(import.meta.url);
+const pkg = _require('../../package.json') as { version: string };
 
 /**
  * Determine whether an HTTP Origin header value is allowed by CORS policy.
@@ -184,11 +190,7 @@ const warmSnapshotCaches = async (): Promise<void> => {
   }
 };
 
-const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
-  // Load ontology for enrichment
-  const { loadOntology, resolveObjectType, getInterfacesForType, resolveLinkType } = await import('../core/ontology/ontology-manager.js');
-  const ontology = await loadOntology();
-
+const buildGraph = async (includeContent = false): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
   const nodes: GraphNode[] = [];
   for (const table of NODE_TABLES) {
     try {
@@ -211,9 +213,6 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
 
       const rows = await executeQuery(query);
       for (const row of rows) {
-        // Resolve ontology ObjectType and Interfaces
-        const objectType = resolveObjectType(ontology, table) ?? undefined;
-        const interfaces = objectType ? getInterfacesForType(ontology, objectType) : [];
 
         nodes.push({
           id: row.id ?? row[0],
@@ -233,9 +232,6 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
             entryPointId: row.entryPointId,
             terminalId: row.terminalId,
           } as GraphNode['properties'],
-          // Ontology enrichment
-          objectType,
-          interfaces,
         });
       }
     } catch {
@@ -248,9 +244,6 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
     `MATCH (a)-[r:CodeRelation]->(b) RETURN a.id AS sourceId, b.id AS targetId, r.type AS type, r.confidence AS confidence, r.reason AS reason, r.step AS step`,
   );
   for (const row of relRows) {
-    const linkType = resolveLinkType(ontology, row.type) ?? undefined;
-    const linkDef = linkType ? ontology.linkTypes.find(lt => lt.apiName === linkType) : undefined;
-
     relationships.push({
       id: `${row.sourceId}_${row.type}_${row.targetId}`,
       type: row.type,
@@ -259,9 +252,6 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
       confidence: row.confidence,
       reason: row.reason,
       step: row.step,
-      // Ontology enrichment
-      linkType,
-      cardinality: linkDef?.cardinality,
     });
   }
 
@@ -1153,13 +1143,10 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   // ─── Service API (for RemoteBackend clients) ────────────────────────
 
   // Health check
-  const _require = createRequire(import.meta.url);
-  const pkgVersion: string = _require('../../package.json').version;
-
   app.get('/api/health', async (_req, res) => {
     try {
       const repos = await backend.listRepos();
-      res.json({ status: 'ok', version: pkgVersion, repos: repos.length });
+      res.json({ status: 'ok', version: pkg.version, repos: repos.length });
     } catch (err: any) {
       res.status(500).json({ status: 'error', error: err.message });
     }
