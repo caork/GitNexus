@@ -26,19 +26,6 @@ export default defineConfig({
     },
   },
   server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-    // Proxy /api requests to the GitNexus backend server so the web UI
-    // can auto-detect and connect to it at the same origin (no CORS issues,
-    // no manual URL entry needed).
-    proxy: {
-      '/api': {
-        target: 'http://localhost:4747',
-        changeOrigin: true,
-      },
-    },
     // Allow serving files from node_modules
     fs: {
       allow: ['..'],
