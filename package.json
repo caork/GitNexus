@@ -1,15 +1,11 @@
 {
   "name": "gitnexus-monorepo",
   "private": true,
-  "workspaces": [
-    "gitnexus",
-    "gitnexus-web"
-  ],
   "scripts": {
-    "install:all": "npm install --workspaces",
-    "build": "npm run build --workspace=gitnexus && npm run build --workspace=gitnexus-web",
-    "build:server": "npm run build --workspace=gitnexus",
-    "build:web": "npm run build --workspace=gitnexus-web",
+    "install:all": "npm install --prefix gitnexus && npm install --prefix gitnexus-web",
+    "build": "npm run build --prefix gitnexus && npm run build --prefix gitnexus-web",
+    "build:server": "npm run build --prefix gitnexus",
+    "build:web": "npm run build --prefix gitnexus-web",
     "start": "node gitnexus/dist/cli/index.js serve",
     "dev": "node gitnexus/dist/cli/index.js serve"
   },
