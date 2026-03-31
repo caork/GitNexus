@@ -12,6 +12,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
+import { spawn, type ChildProcess } from 'child_process';
 import { loadMeta, listRegisteredRepos, loadCLIConfig, saveCLIConfig } from '../storage/repo-manager.js';
 import { executeQuery, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
 import { NODE_TABLES } from '../core/lbug/schema.js';
@@ -178,6 +179,10 @@ const warmSnapshotCaches = async (): Promise<void> => {
 };
 
 const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
+  // Load ontology for enrichment
+  const { loadOntology, resolveObjectType, getInterfacesForType, resolveLinkType } = await import('../core/ontology/ontology-manager.js');
+  const ontology = await loadOntology();
+
   const nodes: GraphNode[] = [];
   for (const table of NODE_TABLES) {
     try {
@@ -196,6 +201,10 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
 
       const rows = await executeQuery(query);
       for (const row of rows) {
+        // Resolve ontology ObjectType and Interfaces
+        const objectType = resolveObjectType(ontology, table) ?? undefined;
+        const interfaces = objectType ? getInterfacesForType(ontology, objectType) : [];
+
         nodes.push({
           id: row.id ?? row[0],
           label: table as GraphNode['label'],
@@ -214,6 +223,9 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
             entryPointId: row.entryPointId,
             terminalId: row.terminalId,
           } as GraphNode['properties'],
+          // Ontology enrichment
+          objectType,
+          interfaces,
         });
       }
     } catch {
@@ -226,6 +238,9 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
     `MATCH (a)-[r:CodeRelation]->(b) RETURN a.id AS sourceId, b.id AS targetId, r.type AS type, r.confidence AS confidence, r.reason AS reason, r.step AS step`
   );
   for (const row of relRows) {
+    const linkType = resolveLinkType(ontology, row.type) ?? undefined;
+    const linkDef = linkType ? ontology.linkTypes.find(lt => lt.apiName === linkType) : undefined;
+
     relationships.push({
       id: `${row.sourceId}_${row.type}_${row.targetId}`,
       type: row.type,
@@ -234,6 +249,9 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
       confidence: row.confidence,
       reason: row.reason,
       step: row.step,
+      // Ontology enrichment
+      linkType,
+      cardinality: linkDef?.cardinality,
     });
   }
 
@@ -840,6 +858,170 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       res.json({ status: 'ok' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Analyze (Index) API ───────────────────────────────────────────────
+  // Spawn `gitnexus analyze` as a child process and stream progress via SSE.
+
+  // Track active analyze jobs so only one runs at a time
+  let activeAnalyzeJob: { proc: ChildProcess; repoPath: string } | null = null;
+
+  /**
+   * POST /api/analyze
+   * Body: { path: string, embeddings?: boolean, force?: boolean }
+   * Response: SSE stream with progress events
+   *
+   * Events:
+   *   data: {"phase":"scanning","percent":30,"message":"Scanning files"}
+   *   data: {"phase":"done","percent":100,"message":"Analysis complete"}
+   *   data: {"phase":"error","message":"..."}
+   */
+  app.post('/api/analyze', async (req, res) => {
+    const { path: repoPath, embeddings, force } = req.body ?? {};
+
+    if (!repoPath || typeof repoPath !== 'string') {
+      res.status(400).json({ error: 'Missing required field: path' });
+      return;
+    }
+
+    // Validate path exists and is a directory
+    try {
+      const stat = await fs.stat(repoPath);
+      if (!stat.isDirectory()) {
+        res.status(400).json({ error: 'Path is not a directory' });
+        return;
+      }
+    } catch {
+      res.status(400).json({ error: 'Path does not exist or is not accessible' });
+      return;
+    }
+
+    if (activeAnalyzeJob) {
+      res.status(409).json({
+        error: 'Analysis already in progress',
+        currentRepo: activeAnalyzeJob.repoPath,
+      });
+      return;
+    }
+
+    // Set up SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const sendEvent = (data: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Build args for gitnexus analyze
+    const args = ['analyze', repoPath];
+    if (embeddings) args.push('--embeddings');
+    if (force) args.push('--force');
+    args.push('--skip-git'); // Allow non-git dirs from web UI
+
+    // Find the gitnexus CLI entry point (dist/cli/index.js relative to package root)
+    const serverDir = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
+    const cliPath = path.resolve(serverDir, '../cli/index.js');
+
+    const proc = spawn(process.execPath, [cliPath, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, FORCE_COLOR: '0' },
+    });
+
+    activeAnalyzeJob = { proc, repoPath };
+
+    sendEvent({ phase: 'started', percent: 0, message: `Analyzing ${path.basename(repoPath)}...` });
+
+    // Parse progress from CLI output (progress bar format: "  ███░░░░ 45% | Scanning files")
+    const parseProgress = (line: string) => {
+      // Match: "  ██████░░ 60% | Phase label (5s)"
+      const barMatch = line.match(/(\d+)%\s*\|\s*(.+)/);
+      if (barMatch) {
+        const percent = parseInt(barMatch[1], 10);
+        const message = barMatch[2].replace(/\s*\(\d+s\)\s*$/, '').trim();
+        sendEvent({ phase: 'progress', percent, message });
+        return;
+      }
+      // Pass through informational messages (non-empty, non-bar lines)
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('█') && !trimmed.startsWith('░')) {
+        sendEvent({ phase: 'info', message: trimmed });
+      }
+    };
+
+    let stdoutBuf = '';
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      stdoutBuf += chunk.toString();
+      // Progress bar uses \r to overwrite — split on both \n and \r
+      const lines = stdoutBuf.split(/[\r\n]+/);
+      stdoutBuf = lines.pop() || '';
+      for (const line of lines) {
+        parseProgress(line);
+      }
+    });
+
+    let stderrBuf = '';
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      stderrBuf += chunk.toString();
+    });
+
+    proc.on('close', async (code) => {
+      activeAnalyzeJob = null;
+      // Flush remaining buffer
+      if (stdoutBuf.trim()) parseProgress(stdoutBuf);
+
+      if (code === 0) {
+        // Rebuild snapshot cache for the new repo so it's ready for the UI
+        try {
+          const repos = await listRegisteredRepos();
+          const repoName = path.basename(repoPath);
+          const repo = repos.find(r => r.name === repoName || r.path === repoPath);
+          if (repo) {
+            const lbugPath = path.join(repo.storagePath, 'lbug');
+            const graph = await withLbugDb(lbugPath, async () => buildGraph());
+            const meta = await loadMeta(repo.storagePath);
+            if (meta) {
+              await writeSnapshot(repo.storagePath, { indexedAt: meta.indexedAt, ...graph });
+            }
+          }
+        } catch (err: any) {
+          console.warn('Failed to build snapshot for new repo:', err.message);
+        }
+
+        sendEvent({ phase: 'done', percent: 100, message: 'Analysis complete' });
+      } else {
+        sendEvent({
+          phase: 'error',
+          message: stderrBuf.trim() || `Analysis failed with exit code ${code}`,
+        });
+      }
+      res.end();
+    });
+
+    proc.on('error', (err) => {
+      activeAnalyzeJob = null;
+      sendEvent({ phase: 'error', message: `Failed to start analysis: ${err.message}` });
+      res.end();
+    });
+
+    // Handle client disconnect
+    req.on('close', () => {
+      if (activeAnalyzeJob?.proc === proc) {
+        proc.kill('SIGTERM');
+        activeAnalyzeJob = null;
+      }
+    });
+  });
+
+  // Check active analysis status
+  app.get('/api/analyze/status', (_req, res) => {
+    if (activeAnalyzeJob) {
+      res.json({ active: true, repoPath: activeAnalyzeJob.repoPath });
+    } else {
+      res.json({ active: false });
     }
   });
 

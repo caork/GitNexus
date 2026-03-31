@@ -129,18 +129,18 @@ export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo }: Heade
         {projectName && (
           <div className="relative" ref={repoDropdownRef}>
             <button
-              onClick={() => availableRepos.length >= 2 && setIsRepoDropdownOpen(prev => !prev)}
-              className={`flex items-center gap-2 px-3 py-1.5 bg-surface border border-border-subtle rounded-lg text-sm text-text-secondary transition-colors ${availableRepos.length >= 2 ? 'hover:bg-hover cursor-pointer' : ''}`}
+              onClick={() => availableRepos.length >= 1 && setIsRepoDropdownOpen(prev => !prev)}
+              className={`flex items-center gap-2 px-3 py-1.5 bg-surface border border-border-subtle rounded-lg text-sm text-text-secondary transition-colors ${availableRepos.length >= 1 ? 'hover:bg-hover cursor-pointer' : ''}`}
             >
               <span className="w-1.5 h-1.5 bg-node-function rounded-full animate-pulse" />
               <span className="truncate max-w-[200px]">{projectName}</span>
-              {availableRepos.length >= 2 && (
+              {availableRepos.length >= 1 && (
                 <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform ${isRepoDropdownOpen ? 'rotate-180' : ''}`} />
               )}
             </button>
 
             {/* Repo dropdown */}
-            {isRepoDropdownOpen && availableRepos.length >= 2 && (
+            {isRepoDropdownOpen && availableRepos.length >= 1 && (
               <div className="absolute top-full left-0 mt-1 w-72 bg-surface border border-border-subtle rounded-lg shadow-xl overflow-hidden z-50">
                 {availableRepos.map((repo) => {
                   const isCurrent = repo.name === projectName;
@@ -167,6 +167,9 @@ export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo }: Heade
                     </button>
                   );
                 })}
+                <div className="px-4 py-2 text-[10px] text-text-muted text-center border-t border-border-subtle">
+                  Use the <span className="text-accent">Nexus AI</span> panel to add new repos.
+                </div>
               </div>
             )}
           </div>

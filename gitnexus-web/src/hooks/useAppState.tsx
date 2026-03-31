@@ -152,6 +152,8 @@ interface AppState {
   updateLLMSettings: (updates: Partial<LLMSettings>) => void;
   isSettingsPanelOpen: boolean;
   setSettingsPanelOpen: (open: boolean) => void;
+  isAddRepoOpen: boolean;
+  setAddRepoOpen: (open: boolean) => void;
   isAgentReady: boolean;
   isAgentInitializing: boolean;
   agentError: string | null;
@@ -311,6 +313,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   // LLM/Agent state
   const [llmSettings, setLLMSettings] = useState<LLMSettings>(loadSettings);
   const [isSettingsPanelOpen, setSettingsPanelOpen] = useState(false);
+  const [isAddRepoOpen, setAddRepoOpen] = useState(false);
   const [isAgentReady, setIsAgentReady] = useState(false);
   const [isAgentInitializing, setIsAgentInitializing] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
@@ -1183,6 +1186,8 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     updateLLMSettings,
     isSettingsPanelOpen,
     setSettingsPanelOpen,
+    isAddRepoOpen,
+    setAddRepoOpen,
     isAgentReady,
     isAgentInitializing,
     agentError,

@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send, Square, Sparkles, User,
-  PanelRightClose, Loader2, AlertTriangle, GitBranch
+  PanelRightClose, Loader2, AlertTriangle, GitBranch, ChevronDown, Database, RefreshCw
 } from '@/lib/lucide-icons';
 import { useAppState } from '../hooks/useAppState';
 import { ToolCallCard } from './ToolCallCard';
 import { isProviderConfigured } from '../core/llm/settings-service';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ProcessesPanel } from './ProcessesPanel';
+import { fetchRepos } from '../services/server-connection';
 export const RightPanel = () => {
   const {
     isRightPanelOpen,
@@ -25,7 +26,46 @@ export const RightPanel = () => {
     sendChatMessage,
     stopChatResponse,
     clearChat,
+    // Repo switching
+    projectName,
+    availableRepos,
+    setAvailableRepos,
+    serverBaseUrl,
+    switchRepo,
+    setAddRepoOpen,
   } = useAppState();
+
+  const [isRepoDropdownOpen, setIsRepoDropdownOpen] = useState(false);
+  const [isRefreshingRepos, setIsRefreshingRepos] = useState(false);
+  const repoDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Refresh available repos from server when dropdown opens
+  const handleOpenRepoDropdown = useCallback(async () => {
+    const willOpen = !isRepoDropdownOpen;
+    setIsRepoDropdownOpen(willOpen);
+    if (willOpen && serverBaseUrl) {
+      setIsRefreshingRepos(true);
+      try {
+        const repos = await fetchRepos(serverBaseUrl);
+        setAvailableRepos(repos);
+      } catch (e) {
+        console.warn('Failed to refresh repo list:', e);
+      } finally {
+        setIsRefreshingRepos(false);
+      }
+    }
+  }, [isRepoDropdownOpen, serverBaseUrl, setAvailableRepos]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (repoDropdownRef.current && !repoDropdownRef.current.contains(e.target as Node)) {
+        setIsRepoDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const [chatInput, setChatInput] = useState('');
   const [activeTab, setActiveTab] = useState<'chat' | 'processes'>('chat');
@@ -249,6 +289,91 @@ export const RightPanel = () => {
           <PanelRightClose className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Repo context bar — always visible */}
+      {projectName && (
+        <div className="relative flex items-center gap-2 px-4 py-2 bg-accent/5 border-b border-accent/20" ref={repoDropdownRef}>
+          <Database className="w-3.5 h-3.5 text-accent flex-shrink-0" />
+          <span className="text-xs text-text-muted">Analyzing:</span>
+          <button
+            onClick={serverBaseUrl ? handleOpenRepoDropdown : undefined}
+            className={`flex items-center gap-1 text-sm font-medium truncate ${
+              serverBaseUrl
+                ? 'text-accent hover:underline cursor-pointer'
+                : 'text-text-primary cursor-default'
+            }`}
+          >
+            <span className="truncate">{projectName}</span>
+            {serverBaseUrl && (
+              <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${isRepoDropdownOpen ? 'rotate-180' : ''}`} />
+            )}
+          </button>
+          {availableRepos.length >= 2 && (
+            <span className="ml-auto text-[10px] text-text-muted">{availableRepos.length} repos</span>
+          )}
+
+          {/* Dropdown — shows all server repos for switching */}
+          {isRepoDropdownOpen && serverBaseUrl && (
+            <div className="absolute top-full left-0 right-0 mt-0 bg-surface border border-border-subtle rounded-b-lg shadow-xl overflow-hidden z-50">
+              {isRefreshingRepos && (
+                <div className="px-4 py-2.5 flex items-center gap-2 text-text-muted text-xs">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  <span>Loading repos from server...</span>
+                </div>
+              )}
+              {!isRefreshingRepos && availableRepos.length === 0 && (
+                <div className="px-4 py-3 text-xs text-text-muted text-center">
+                  No repos found on server.
+                  <br />
+                  <span className="text-[10px]">Run <code className="bg-hover px-1 rounded">gitnexus analyze</code> on the server to index a repo.</span>
+                </div>
+              )}
+              {availableRepos.map((repo) => {
+                const isCurrent = repo.name === projectName;
+                return (
+                  <button
+                    key={repo.name}
+                    disabled={isCurrent || isChatLoading}
+                    onClick={() => {
+                      setIsRepoDropdownOpen(false);
+                      switchRepo(repo.name);
+                    }}
+                    className={`w-full px-4 py-2.5 flex items-center gap-2.5 text-left transition-colors disabled:opacity-60 ${
+                      isCurrent
+                        ? 'bg-accent/10 border-l-2 border-accent'
+                        : 'hover:bg-hover border-l-2 border-transparent'
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isCurrent ? 'bg-accent animate-pulse' : 'bg-text-muted'}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-sm font-medium truncate ${isCurrent ? 'text-accent' : 'text-text-primary'}`}>
+                        {repo.name}
+                      </div>
+                      <div className="text-[11px] text-text-muted">
+                        {repo.stats?.nodes ?? '?'} nodes · {repo.stats?.files ?? '?'} files
+                      </div>
+                    </div>
+                    {isCurrent && <span className="text-[10px] text-accent font-medium">active</span>}
+                  </button>
+                );
+              })}
+              {/* Add Repository button */}
+              {!isRefreshingRepos && (
+                <button
+                  onClick={() => {
+                    setIsRepoDropdownOpen(false);
+                    setAddRepoOpen(true);
+                  }}
+                  className="w-full px-4 py-2.5 flex items-center gap-2.5 text-left border-t border-border-subtle hover:bg-hover transition-colors text-accent text-sm"
+                >
+                  <span className="w-4 h-4 flex items-center justify-center rounded-full border border-accent/50 text-xs">+</span>
+                  <span>Add Repository</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Processes Tab */}
       {activeTab === 'processes' && (

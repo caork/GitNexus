@@ -110,7 +110,11 @@ export type RelationshipType =
 export interface GraphNode {
   id:  string,
   label: NodeLabel,
-  properties: NodeProperties,  
+  properties: NodeProperties,
+  /** Ontology Object Type (e.g. 'Function', 'Class', 'Community') — resolved from default-ontology.ts */
+  objectType?: string,
+  /** Ontology Interfaces this type implements (e.g. ['Callable', 'CodeEntity']) */
+  interfaces?: string[],
 }
 
 export interface GraphRelationship {
@@ -124,6 +128,10 @@ export interface GraphRelationship {
   reason: string,
   /** Step number for STEP_IN_PROCESS relationships (1-indexed) */
   step?: number,
+  /** Ontology Link Type (e.g. 'CALLS', 'EXTENDS') — resolved from default-ontology.ts */
+  linkType?: string,
+  /** Ontology cardinality constraint (e.g. 'one-to-many', 'many-to-many') */
+  cardinality?: string,
 }
 
 export interface KnowledgeGraph {

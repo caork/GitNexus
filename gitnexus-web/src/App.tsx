@@ -42,11 +42,18 @@ const AppContent = () => {
     setAvailableRepos,
     switchRepo,
     loadServerGraph,
+    isAddRepoOpen,
+    setAddRepoOpen,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
 
+  // Track whether a local upload (ZIP / git clone) is in progress or completed.
+  // When true, auto-connect will NOT override locally loaded data.
+  const localDataLoadedRef = useRef(false);
+
   const handleFileSelect = useCallback(async (file: File) => {
+    localDataLoadedRef.current = true; // Mark: user chose local upload
     const projectName = file.name.replace('.zip', '');
     setProjectName(projectName);
     setProgress({ phase: 'extracting', percent: 0, message: 'Starting...', detail: 'Preparing to extract files' });
@@ -86,6 +93,7 @@ const AppContent = () => {
   }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipeline, startEmbeddingsWithFallback, initializeAgent]);
 
   const handleGitClone = useCallback(async (files: FileEntry[], repoName?: string) => {
+    localDataLoadedRef.current = true; // Mark: user chose local upload
     let projectName = repoName;
     if (!projectName) {
       const firstPath = files[0]?.path || 'repository';
@@ -199,6 +207,8 @@ const AppContent = () => {
       .then(r => { if (!r.ok) throw new Error('not ok'); return r.json(); })
       .then((health) => {
         if (!health?.status || health.repos === 0) throw new Error('no repos');
+        // Abort if user started a local upload while health check was in-flight
+        if (localDataLoadedRef.current) throw new Error('local data loaded');
 
         setProgress({ phase: 'extracting', percent: 0, message: 'Connecting to server...', detail: 'Loading graph from server' });
         setViewMode('loading');
@@ -216,6 +226,12 @@ const AppContent = () => {
         }, undefined, hashRepo);
       })
       .then(async (result) => {
+        // Abort if user started a local upload while server data was downloading
+        if (localDataLoadedRef.current) {
+          console.log('Auto-connect aborted: local data was loaded by user');
+          setProgress(null);
+          return;
+        }
         await handleServerConnect(result);
         setProgress(null);
         setServerBaseUrl(baseUrl);
@@ -313,6 +329,46 @@ const AppContent = () => {
         onClose={() => setSettingsPanelOpen(false)}
         onSettingsSaved={handleSettingsSaved}
       />
+
+      {/* Add Repository modal — full DropZone experience in an overlay */}
+      {isAddRepoOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm overflow-y-auto">
+          <button
+            className="absolute top-4 right-4 p-2 text-text-muted hover:text-text-primary bg-surface rounded-lg border border-border-subtle transition-colors z-10"
+            onClick={() => setAddRepoOpen(false)}
+            title="Close"
+          >
+            ✕
+          </button>
+          <DropZone
+            onFileSelect={async (file) => {
+              setAddRepoOpen(false);
+              await handleFileSelect(file);
+            }}
+            onGitClone={async (files, repoName) => {
+              setAddRepoOpen(false);
+              await handleGitClone(files, repoName);
+            }}
+            onServerConnect={async (result, serverUrl) => {
+              setAddRepoOpen(false);
+              await handleServerConnect(result);
+              setProgress(null);
+              if (serverUrl) {
+                const baseUrl = normalizeServerUrl(serverUrl);
+                setServerBaseUrl(baseUrl);
+                const repoName = result.repoInfo?.name ||
+                  result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() || '';
+                if (repoName) {
+                  window.history.replaceState(null, '', `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`);
+                }
+                fetchRepos(baseUrl)
+                  .then((repos) => setAvailableRepos(repos))
+                  .catch((e) => console.warn('Failed to fetch repo list:', e));
+              }
+            }}
+          />
+        </div>
+      )}
 
     </div>
   );

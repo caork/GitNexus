@@ -227,8 +227,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
             {appSelectedNode.properties.name}
           </span>
           <span className="text-xs text-text-muted">
-            ({appSelectedNode.label})
+            ({appSelectedNode.objectType ?? appSelectedNode.label})
           </span>
+          {appSelectedNode.interfaces && appSelectedNode.interfaces.length > 0 && (
+            <span className="text-xs text-accent/70">
+              [{appSelectedNode.interfaces.join(', ')}]
+            </span>
+          )}
           <button
             onClick={handleClearSelection}
             className="ml-2 px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary hover:bg-white/10 rounded transition-colors"

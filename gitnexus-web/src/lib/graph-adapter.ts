@@ -1,6 +1,6 @@
 import Graph from 'graphology';
 import { KnowledgeGraph, NodeLabel } from '../core/graph/types';
-import { NODE_COLORS, NODE_SIZES, getCommunityColor } from './constants';
+import { NODE_COLORS, NODE_SIZES, getCommunityColor, INTERFACE_COLORS } from './constants';
 
 export interface SigmaNodeAttributes {
   x: number;
@@ -18,6 +18,9 @@ export interface SigmaNodeAttributes {
   mass?: number; // ForceAtlas2 mass - higher = more repulsion
   community?: number; // Community index from Leiden algorithm
   communityColor?: string; // Color assigned by community
+  // Ontology metadata
+  objectType?: string;       // e.g. 'Function', 'Class', 'Community'
+  interfaces?: string[];     // e.g. ['Callable', 'CodeEntity']
 }
 
 export interface SigmaEdgeAttributes {
@@ -71,6 +74,26 @@ const getNodeMass = (nodeType: NodeLabel, nodeCount: number): number => {
     default:
       return 1;  // Default mass
   }
+};
+
+/**
+ * Resolve node color using ontology Interface if available, falling back to NodeLabel.
+ * Priority: Interface-based color (Callable, TypeDefinition, etc.) > NODE_COLORS[label]
+ */
+const resolveNodeColor = (label: NodeLabel, interfaces?: string[]): string => {
+  if (interfaces && interfaces.length > 0) {
+    // Use the most specific interface (first non-CodeEntity match)
+    for (const iface of interfaces) {
+      if (iface !== 'CodeEntity' && INTERFACE_COLORS[iface]) {
+        return INTERFACE_COLORS[iface];
+      }
+    }
+    // Fall back to CodeEntity if that's the only interface
+    if (INTERFACE_COLORS[interfaces[0]]) {
+      return INTERFACE_COLORS[interfaces[0]];
+    }
+  }
+  return NODE_COLORS[label] || '#9ca3af';
 };
 
 /**
@@ -167,12 +190,13 @@ export const knowledgeGraphToGraphology = (
     const baseSize = NODE_SIZES[node.label] || 8;
     const scaledSize = getScaledNodeSize(baseSize, nodeCount);
     
-    // Structural nodes keep their type-based color
+    // Structural nodes keep their type-based color (ontology: FileSystemEntry / ArchitecturalUnit)
+    const structColor = resolveNodeColor(node.label, node.interfaces);
     graph.addNode(node.id, {
       x,
       y,
       size: scaledSize,
-      color: NODE_COLORS[node.label] || '#9ca3af',
+      color: structColor,
       label: node.properties.name,
       nodeType: node.label,
       filePath: node.properties.filePath,
@@ -180,6 +204,8 @@ export const knowledgeGraphToGraphology = (
       endLine: node.properties.endLine,
       hidden: false,
       mass: getNodeMass(node.label, nodeCount),
+      objectType: node.objectType,
+      interfaces: node.interfaces,
     });
   });
 
@@ -225,12 +251,12 @@ export const knowledgeGraphToGraphology = (
     // Check if this node has a community assignment (reuse communityIndex from above)
     const hasCommunity = communityIndex !== undefined;
     
-    // Symbol nodes get colored by community if available
+    // Symbol nodes get colored by community if available, otherwise by ontology Interface
     const usesCommunityColor = hasCommunity && symbolTypes.has(node.label);
-    const nodeColor = usesCommunityColor 
+    const nodeColor = usesCommunityColor
       ? getCommunityColor(communityIndex!)
-      : NODE_COLORS[node.label] || '#9ca3af';
-    
+      : resolveNodeColor(node.label, node.interfaces);
+
     graph.addNode(nodeId, {
       x,
       y,
@@ -245,6 +271,8 @@ export const knowledgeGraphToGraphology = (
       mass: getNodeMass(node.label, nodeCount),
       community: communityIndex,
       communityColor: hasCommunity ? getCommunityColor(communityIndex!) : undefined,
+      objectType: node.objectType,
+      interfaces: node.interfaces,
     });
   };
   

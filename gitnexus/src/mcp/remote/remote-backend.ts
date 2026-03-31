@@ -56,7 +56,9 @@ export class RemoteBackend implements Backend {
   // ─── Tool dispatch ────────────────────────────────────────────────
 
   async callTool(method: string, params: any): Promise<any> {
-    const data = await this.fetchJSON<{ result: any }>('POST', `/api/tools/${encodeURIComponent(method)}`, params ?? {});
+    // analyze can take minutes — use a longer timeout
+    const timeout = method === 'analyze' ? 600_000 : undefined;
+    const data = await this.fetchJSON<{ result: any }>('POST', `/api/tools/${encodeURIComponent(method)}`, params ?? {}, timeout);
     return data.result;
   }
 
@@ -122,10 +124,10 @@ export class RemoteBackend implements Backend {
 
   // ─── HTTP helper ──────────────────────────────────────────────────
 
-  private async fetchJSON<T>(method: 'GET' | 'POST', path: string, body?: any): Promise<T> {
+  private async fetchJSON<T>(method: 'GET' | 'POST', path: string, body?: any, timeoutMs?: number): Promise<T> {
     const url = `${this.serverUrl}${path}`;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs ?? REQUEST_TIMEOUT_MS);
 
     try {
       const options: RequestInit = {

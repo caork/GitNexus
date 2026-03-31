@@ -369,11 +369,73 @@ export class LocalBackend implements Backend {
     }));
   }
 
+  // ─── Analyze (Index a new repo) ──────────────────────────────────
+
+  /**
+   * Run `gitnexus analyze <path>` as a child process and wait for it to complete.
+   * After success, refreshes the repo registry so the new repo is immediately queryable.
+   */
+  async analyze(params: { path: string; embeddings?: boolean; force?: boolean }): Promise<string> {
+    const { spawn } = await import('child_process');
+    const fsP = await import('fs/promises');
+    const pathM = await import('path');
+
+    const repoPath = params.path;
+    if (!repoPath) throw new Error('Missing required parameter: path');
+
+    // Validate the directory exists
+    try {
+      const stat = await fsP.stat(repoPath);
+      if (!stat.isDirectory()) throw new Error('Not a directory');
+    } catch {
+      throw new Error(`Path does not exist or is not a directory: ${repoPath}`);
+    }
+
+    // Find the CLI entry point (sibling to this file's compiled location)
+    const thisDir = pathM.dirname(new URL(import.meta.url).pathname);
+    const cliPath = pathM.resolve(thisDir, '../../cli/index.js');
+
+    const args = ['analyze', repoPath, '--skip-git'];
+    if (params.embeddings) args.push('--embeddings');
+    if (params.force) args.push('--force');
+
+    return new Promise<string>((resolve, reject) => {
+      const proc = spawn(process.execPath, [cliPath, ...args], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, FORCE_COLOR: '0' },
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+      proc.on('close', async (code) => {
+        if (code === 0) {
+          // Refresh registry so the new repo is immediately available
+          await this.refreshRepos();
+          const repoName = pathM.basename(repoPath);
+          resolve(`Successfully indexed repository "${repoName}" at ${repoPath}.\n\nYou can now use it with: gitnexus_query({ query: "...", repo: "${repoName}" })`);
+        } else {
+          reject(new Error(`Analysis failed (exit code ${code}): ${stderr.trim() || stdout.trim()}`));
+        }
+      });
+
+      proc.on('error', (err) => {
+        reject(new Error(`Failed to start analysis: ${err.message}`));
+      });
+    });
+  }
+
   // ─── Tool Dispatch ───────────────────────────────────────────────
 
   async callTool(method: string, params: any): Promise<any> {
     if (method === 'list_repos') {
       return this.listRepos();
+    }
+    if (method === 'analyze') {
+      return this.analyze(params);
     }
 
     // Resolve repo from optional param (re-reads registry on miss)

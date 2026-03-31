@@ -1,6 +1,15 @@
 import { useMemo } from 'react';
-import { Heart } from '@/lib/lucide-icons';
 import { useAppState } from '../hooks/useAppState';
+import { INTERFACE_COLORS } from '../lib/constants';
+
+// Ontology Interface legend entries
+const INTERFACE_LEGEND: { name: string; label: string }[] = [
+  { name: 'Callable', label: 'Callable' },
+  { name: 'TypeDefinition', label: 'Type Def' },
+  { name: 'FileSystemEntry', label: 'File/Dir' },
+  { name: 'ArchitecturalUnit', label: 'Architecture' },
+  { name: 'CodeEntity', label: 'Code Entity' },
+];
 
 export const StatusBar = () => {
   const { graph, progress } = useAppState();
@@ -22,6 +31,20 @@ export const StatusBar = () => {
     }, {} as Record<string, number>);
 
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
+  }, [graph]);
+
+  // Count nodes per ontology interface
+  const interfaceCounts = useMemo(() => {
+    if (!graph) return null;
+    const counts: Record<string, number> = {};
+    for (const node of graph.nodes) {
+      if (node.interfaces && node.interfaces.length > 0) {
+        // Count by most specific interface (first non-CodeEntity)
+        const primary = node.interfaces.find(i => i !== 'CodeEntity') ?? node.interfaces[0];
+        counts[primary] = (counts[primary] || 0) + 1;
+      }
+    }
+    return Object.keys(counts).length > 0 ? counts : null;
   }, [graph]);
 
   return (
@@ -46,30 +69,37 @@ export const StatusBar = () => {
         )}
       </div>
 
-      {/* Center - Sponsor */}
-      <a
-        href="https://github.com/sponsors/abhigyanpatwari"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="group flex items-center gap-2 px-3 py-1 rounded-full bg-pink-500/10 border border-pink-500/20 hover:bg-pink-500/20 hover:border-pink-500/40 hover:scale-[1.02] transition-all duration-200 cursor-pointer"
-      >
-        <Heart className="w-3.5 h-3.5 text-pink-500 fill-pink-500/40 group-hover:fill-pink-500 group-hover:scale-110 transition-all duration-200 animate-pulse" />
-        <span className="text-[11px] font-medium text-pink-400 group-hover:text-pink-300 transition-colors">Sponsor</span>
-        <span className="text-[10px] text-pink-300/50 group-hover:text-pink-300/80 italic hidden md:inline transition-colors">
-          need to buy some API credits to run SWE-bench 😅
-        </span>
-      </a>
+      {/* Center - Ontology Interface Legend */}
+      {interfaceCounts && (
+        <div className="flex items-center gap-3">
+          <span className="text-text-muted font-medium">Ontology:</span>
+          {INTERFACE_LEGEND.map(({ name, label }) => {
+            const count = interfaceCounts[name];
+            if (!count) return null;
+            return (
+              <div key={name} className="flex items-center gap-1.5">
+                <span
+                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: INTERFACE_COLORS[name] }}
+                />
+                <span>{label}</span>
+                <span className="text-text-muted/60">({count})</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Right - Stats */}
       <div className="flex items-center gap-3">
         {graph && (
           <>
             <span>{nodeCount} nodes</span>
-            <span className="text-border-default">•</span>
+            <span className="text-border-default">&middot;</span>
             <span>{edgeCount} edges</span>
             {primaryLanguage && (
               <>
-                <span className="text-border-default">•</span>
+                <span className="text-border-default">&middot;</span>
                 <span>{primaryLanguage}</span>
               </>
             )}

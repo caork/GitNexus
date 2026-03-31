@@ -67,6 +67,8 @@ export {
   Trash2,
   Type,
   Upload,
+  Cpu,
+  Database,
   User,
   Variable,
   X,

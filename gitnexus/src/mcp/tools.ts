@@ -295,4 +295,27 @@ Returns: single route object when one match, or { routes: [...], total: N } for 
       required: [],
     },
   },
+  {
+    name: 'analyze',
+    description: `Index a repository so it becomes available for GitNexus queries.
+
+Runs the full analysis pipeline on the given directory: scanning files, parsing code,
+resolving imports, tracing calls, detecting communities and processes, loading into
+LadybugDB, and creating search indexes.
+
+WHEN TO USE: When you need to query a repo that isn't indexed yet. Run list_repos first
+to check if it's already available. Analysis can take 30s–5min depending on repo size.
+
+The tool runs synchronously and returns when analysis is complete. After success, the
+repo is immediately available for query/context/impact/etc.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute path to the repository directory on the server.' },
+        embeddings: { type: 'boolean', description: 'Generate embeddings for semantic search (slower). Default: false.' },
+        force: { type: 'boolean', description: 'Force re-index even if already up to date. Default: false.' },
+      },
+      required: ['path'],
+    },
+  },
 ];
