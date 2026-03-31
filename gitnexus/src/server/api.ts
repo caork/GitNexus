@@ -292,6 +292,31 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   }));
   app.use(express.json({ limit: '10mb' }));
 
+  // ─── Serve Web UI static files ────────────────────────────────────────────
+  // When the built web UI exists alongside the server package, serve it here.
+  // The web UI needs Cross-Origin Isolation headers for SharedArrayBuffer (WASM).
+  const serverDir = path.dirname(new URL(import.meta.url).pathname);
+  const webDistDir = process.env.GITNEXUS_WEB_DIR
+    ?? path.resolve(serverDir, '../../../gitnexus-web/dist');
+
+  let serveStatic = false;
+  try {
+    await fs.access(path.join(webDistDir, 'index.html'));
+    serveStatic = true;
+  } catch { /* web UI not built — skip */ }
+
+  if (serveStatic) {
+    // Required headers for SharedArrayBuffer (used by LadybugDB WASM worker)
+    app.use((req, res, next) => {
+      if (!req.path.startsWith('/api') && !req.path.startsWith('/mcp')) {
+        res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+        res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+      }
+      next();
+    });
+    app.use(express.static(webDistDir));
+  }
+
   // Initialize MCP backend (multi-repo, shared across all MCP sessions)
   const backend = new LocalBackend();
   await backend.init();
@@ -1024,6 +1049,17 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       res.json({ active: false });
     }
   });
+
+  // SPA fallback — serve index.html for all non-API routes so client-side
+  // routing works (e.g. refreshing on /#repo=GitNexus still loads the app).
+  if (serveStatic) {
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api') || req.path.startsWith('/mcp')) return next();
+      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+      res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+      res.sendFile(path.join(webDistDir, 'index.html'));
+    });
+  }
 
   // Global error handler — catch anything the route handlers miss
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
