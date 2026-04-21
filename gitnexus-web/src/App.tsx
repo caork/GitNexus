@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppStateProvider, useAppState } from './hooks/useAppState';
 import { DropZone } from './components/DropZone';
 import { LoadingOverlay } from './components/LoadingOverlay';
@@ -20,6 +20,7 @@ import {
   type ConnectResult,
   type BackendRepo,
 } from './services/backend-client';
+import { ERROR_RESET_DELAY_MS } from './config/ui-constants';
 
 const AppContent = () => {
   const {
@@ -43,23 +44,25 @@ const AppContent = () => {
     availableRepos,
     setAvailableRepos,
     switchRepo,
-    isAddRepoOpen,
-    setAddRepoOpen,
+    setCurrentRepo,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
-
-  // Track whether a local upload (ZIP / git clone) is in progress or completed.
-  // When true, auto-connect will NOT override locally loaded data.
-  const localDataLoadedRef = useRef(false);
+  const [serverDisconnected, setServerDisconnected] = useState(false);
 
   const handleServerConnect = useCallback(
     async (result: ConnectResult): Promise<void> => {
-      // Extract project name from repoPath
+      // Use the canonical repo name from the server response so all subsequent
+      // backend calls (queries, search, grep, readFile) scope to this repo.
+      const repoName = result.repoInfo.name;
       const repoPath = result.repoInfo.repoPath ?? result.repoInfo.path;
-      const parts = (repoPath || '').split('/').filter((p) => p && !p.startsWith('.'));
-      const projectName = parts[parts.length - 1] || parts[0] || 'server-project';
+      // Normalize both Windows (\) and Unix (/) path separators before splitting
+      const projectName =
+        result.repoInfo.name ||
+        (repoPath || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() ||
+        'server-project';
       setProjectName(projectName);
+      setCurrentRepo(projectName);
 
       // Build KnowledgeGraph from server data for visualization
       const graph = createKnowledgeGraph();
@@ -70,6 +73,11 @@ const AppContent = () => {
         graph.addRelationship(rel);
       }
       setGraph(graph);
+
+      // Persist the active project in the URL for bookmarkability and F5 refresh resilience
+      const urlObj = new URL(window.location.href);
+      urlObj.searchParams.set('project', projectName);
+      window.history.replaceState(null, '', urlObj.toString());
 
       // Transition directly to exploring view
       setViewMode('exploring');
@@ -84,113 +92,94 @@ const AppContent = () => {
         console.warn('Failed to initialize agent:', err);
       }
     },
-    [setViewMode, setGraph, setProjectName, initializeAgent, startEmbeddingsWithFallback],
+    [
+      setViewMode,
+      setGraph,
+      setProjectName,
+      setCurrentRepo,
+      initializeAgent,
+      startEmbeddingsWithFallback,
+    ],
   );
 
-  // Auto-connect: detect server via /api/health (same origin or ?server param).
-  // On refresh, reads repo name from URL hash (#repo=Name) to restore session.
+  // Auto-connect when ?server or ?project query param is present (bookmarkable shortcut)
   const autoConnectRan = useRef(false);
   useEffect(() => {
     if (autoConnectRan.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const serverUrlParam = params.get('server');
+    const projectParam = params.get('project');
+
+    if (!serverUrlParam && !projectParam) return;
     autoConnectRan.current = true;
 
-    const params = new URLSearchParams(window.location.search);
-    const paramUrl = params.get('server');
+    setProgress({
+      phase: 'extracting',
+      percent: 0,
+      message: 'Connecting to server...',
+      detail: 'Validating server',
+    });
+    setViewMode('loading');
 
-    // Determine server URL: explicit ?server param, or same origin (Vite proxy)
-    const serverUrl = paramUrl || window.location.origin;
-
-    // Read repo name from URL hash (e.g. #repo=GitNexus)
-    const hashRepo = window.location.hash.match(/repo=([^&]+)/)?.[1] ?? undefined;
-
-    // Clean ?server param from URL (keep hash)
-    if (paramUrl) {
-      const cleanUrl = window.location.pathname + window.location.hash;
-      window.history.replaceState(null, '', cleanUrl);
-    }
-
-    // Probe the server — if it responds, auto-connect
+    const serverUrl = serverUrlParam || window.location.origin;
     const baseUrl = normalizeServerUrl(serverUrl);
-    fetch(`${baseUrl.replace(/\/api$/, '')}/api/health`)
-      .then((r) => {
-        if (!r.ok) throw new Error('not ok');
-        return r.json();
-      })
-      .then((health) => {
-        if (!health?.status || health.repos === 0) throw new Error('no repos');
-        // Abort if user started a local upload while health check was in-flight
-        if (localDataLoadedRef.current) throw new Error('local data loaded');
 
-        setProgress({
-          phase: 'extracting',
-          percent: 0,
-          message: 'Connecting to server...',
-          detail: 'Loading graph from server',
-        });
-        setViewMode('loading');
+    const tryConnect = async () => {
+      return await connectToServer(
+        serverUrl,
+        (phase, downloaded, total) => {
+          if (phase === 'validating') {
+            setProgress({
+              phase: 'extracting',
+              percent: 5,
+              message: 'Connecting to server...',
+              detail: 'Validating server',
+            });
+          } else if (phase === 'downloading') {
+            const pct = total ? Math.round((downloaded / total) * 90) + 5 : 50;
+            const mb = (downloaded / (1024 * 1024)).toFixed(1);
+            setProgress({
+              phase: 'extracting',
+              percent: pct,
+              message: 'Downloading graph...',
+              detail: `${mb} MB downloaded`,
+            });
+          } else if (phase === 'extracting') {
+            setProgress({
+              phase: 'extracting',
+              percent: 97,
+              message: 'Processing...',
+              detail: 'Extracting file contents',
+            });
+          }
+        },
+        undefined,
+        projectParam || undefined,
+        { awaitAnalysis: true }, // enable backend hold-queue for repos still being analyzed
+      );
+    };
 
-        return connectToServer(
-          serverUrl,
-          (phase, downloaded, total) => {
-            if (phase === 'validating') {
-              setProgress({
-                phase: 'extracting',
-                percent: 5,
-                message: 'Connecting to server...',
-                detail: 'Validating server',
-              });
-            } else if (phase === 'downloading') {
-              const pct = total ? Math.round((downloaded / total) * 90) + 5 : 50;
-              const mb = (downloaded / (1024 * 1024)).toFixed(1);
-              setProgress({
-                phase: 'extracting',
-                percent: pct,
-                message: 'Downloading graph...',
-                detail: `${mb} MB downloaded`,
-              });
-            } else if (phase === 'extracting') {
-              setProgress({
-                phase: 'extracting',
-                percent: 97,
-                message: 'Processing...',
-                detail: 'Extracting file contents',
-              });
-            }
-          },
-          undefined,
-          hashRepo,
-        );
-      })
+    tryConnect()
       .then(async (result) => {
-        // Abort if user started a local upload while server data was downloading
-        if (localDataLoadedRef.current) {
-          console.log('Auto-connect aborted: local data was loaded by user');
-          setProgress(null);
-          return;
-        }
         await handleServerConnect(result);
         setProgress(null);
         setServerBaseUrl(baseUrl);
-
-        // Set repo name in URL hash for refresh persistence
-        const repoName =
-          result.repoInfo?.name ||
-          result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() ||
-          '';
-        if (repoName) {
-          window.history.replaceState(
-            null,
-            '',
-            `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`,
-          );
-        }
-
         fetchRepos()
           .then((repos) => setAvailableRepos(repos))
           .catch((e) => console.warn('Failed to fetch repo list:', e));
       })
-      .catch(() => {
-        // Server not available — fall through to onboarding (DropZone)
+      .catch((err) => {
+        console.error('Auto-connect failed:', err);
+        setProgress({
+          phase: 'error',
+          percent: 0,
+          message: 'Failed to connect to server',
+          detail: err instanceof Error ? err.message : 'Unknown error',
+        });
+        setTimeout(() => {
+          setViewMode('onboarding');
+          setProgress(null);
+        }, ERROR_RESET_DELAY_MS);
       });
   }, [handleServerConnect, setProgress, setViewMode, setServerBaseUrl, setAvailableRepos]);
 
@@ -207,21 +196,18 @@ const AppContent = () => {
 
   // ── Server heartbeat: detect when server goes down while exploring ────────
   // Uses SSE (EventSource) for instant detection — no polling delay.
+  // On disconnect: show a reconnecting banner instead of resetting to onboarding.
+  // The heartbeat retries indefinitely with capped backoff and recovers automatically.
   useEffect(() => {
     if (viewMode !== 'exploring') return;
 
     const cleanup = connectHeartbeat(
-      () => {}, // onConnect — already connected, no action needed
-      () => {
-        // Server went down — return to onboarding
-        setViewMode('onboarding');
-        setGraph(null);
-        setProgress(null);
-      },
+      () => setServerDisconnected(false),
+      () => setServerDisconnected(true),
     );
 
     return cleanup;
-  }, [viewMode, setViewMode, setGraph, setProgress]);
+  }, [viewMode]);
 
   // Render based on view mode
   if (viewMode === 'onboarding') {
@@ -234,25 +220,12 @@ const AppContent = () => {
           await handleServerConnect(result);
           setProgress(null);
           if (serverUrl) {
-            const baseUrl = normalizeServerUrl(serverUrl);
-            setServerBaseUrl(baseUrl);
-
-            // Set repo name in URL hash for refresh persistence
-            const repoName =
-              result.repoInfo?.name ||
-              result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() ||
-              '';
-            if (repoName) {
-              window.history.replaceState(
-                null,
-                '',
-                `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`,
-              );
-            }
-
-            fetchRepos()
-              .then((repos) => setAvailableRepos(repos))
-              .catch((e) => console.warn('Failed to fetch repo list:', e));
+            const base = normalizeServerUrl(serverUrl);
+            setServerBaseUrl(base);
+            // Add ?server= so F5 reconnects to this server
+            const url = new URL(window.location.href);
+            url.searchParams.set('server', base);
+            window.history.replaceState(null, '', url.toString());
           }
         }}
       />
@@ -324,50 +297,18 @@ const AppContent = () => {
 
       <StatusBar />
 
+      {serverDisconnected && (
+        <div className="fixed bottom-12 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-yellow-500/30 bg-yellow-900/80 px-4 py-2 text-sm text-yellow-200 shadow-lg backdrop-blur">
+          Server connection lost — reconnecting&hellip;
+        </div>
+      )}
+
       {/* Settings Panel (modal) */}
       <SettingsPanel
         isOpen={isSettingsPanelOpen}
         onClose={() => setSettingsPanelOpen(false)}
         onSettingsSaved={handleSettingsSaved}
       />
-
-      {/* Add Repository modal — full DropZone experience in an overlay */}
-      {isAddRepoOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm">
-          <button
-            className="absolute top-4 right-4 z-10 rounded-lg border border-border-subtle bg-surface p-2 text-text-muted transition-colors hover:text-text-primary"
-            onClick={() => setAddRepoOpen(false)}
-            title="Close"
-          >
-            ✕
-          </button>
-          <DropZone
-            onServerConnect={async (result, serverUrl) => {
-              setAddRepoOpen(false);
-              await handleServerConnect(result);
-              setProgress(null);
-              if (serverUrl) {
-                const baseUrl = normalizeServerUrl(serverUrl);
-                setServerBaseUrl(baseUrl);
-                const repoName =
-                  result.repoInfo?.name ||
-                  result.repoInfo?.repoPath?.split('/').filter(Boolean).pop() ||
-                  '';
-                if (repoName) {
-                  window.history.replaceState(
-                    null,
-                    '',
-                    `${window.location.pathname}#repo=${encodeURIComponent(repoName)}`,
-                  );
-                }
-                fetchRepos()
-                  .then((repos) => setAvailableRepos(repos))
-                  .catch((e) => console.warn('Failed to fetch repo list:', e));
-              }
-            }}
-          />
-        </div>
-      )}
     </div>
   );
 };

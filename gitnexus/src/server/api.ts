@@ -4,7 +4,7 @@
  * REST API for browser-based clients to query the local .gitnexus/ index.
  * Also hosts the MCP server over StreamableHTTP for remote AI tool access.
  *
- * Security: binds to 127.0.0.1 by default (use --host to override).
+ * Security: binds to localhost by default (use --host to override).
  * CORS is restricted to localhost, private/LAN networks, and the deployed site.
  */
 
@@ -12,28 +12,31 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
-import { spawn, type ChildProcess } from 'child_process';
 import { createRequire } from 'node:module';
+import { loadMeta, listRegisteredRepos, getStoragePath } from '../storage/repo-manager.js';
 import {
-  loadMeta,
-  listRegisteredRepos,
-  loadCLIConfig,
-  saveCLIConfig,
-  getStoragePath,
-} from '../storage/repo-manager.js';
-import { executeQuery, executePrepared, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
-import { isWriteQuery } from '../mcp/core/lbug-adapter.js';
+  executeQuery,
+  executePrepared,
+  executeWithReusedStatement,
+  streamQuery,
+  closeLbug,
+  withLbugDb,
+} from '../core/lbug/lbug-adapter.js';
+import { isWriteQuery } from '../core/lbug/pool-adapter.js';
 import { NODE_TABLES, type GraphNode, type GraphRelationship } from 'gitnexus-shared';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
 import { hybridSearch } from '../core/search/hybrid-search.js';
-// Embedding imports are lazy (dynamic import) — only needed when HTTP endpoint is configured
+// Embedding imports are lazy (dynamic import) to avoid loading onnxruntime-node
+// at server startup — crashes on unsupported Node ABI versions (#89)
 import { LocalBackend } from '../mcp/local/local-backend.js';
-import { readResource } from '../mcp/resources.js';
 import { mountMCPEndpoints } from './mcp-http.js';
+import { fork } from 'child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { JobManager } from './analyze-job.js';
+import { extractRepoName, getCloneDir, cloneOrPull } from './git-clone.js';
 
 const _require = createRequire(import.meta.url);
-const pkg = _require('../../package.json') as { version: string };
+const pkg = _require('../../package.json');
 
 /**
  * Determine whether an HTTP Origin header value is allowed by CORS policy.
@@ -103,93 +106,95 @@ export const isAllowedOrigin = (origin: string | undefined): boolean => {
   return false;
 };
 
-// ─── Graph Snapshot Cache ──────────────────────────────────────────────
-// Pre-serialize graph JSON to disk so repeated web UI loads are instant.
-// Snapshots are stored at <storagePath>/graph-snapshot.json alongside the
-// LadybugDB files and invalidated when meta.indexedAt changes.
+type GraphStreamRecord =
+  | { type: 'node'; data: GraphNode }
+  | { type: 'relationship'; data: GraphRelationship }
+  | { type: 'error'; error: string };
 
-const SNAPSHOT_FILE = 'graph-snapshot.json';
-
-interface GraphSnapshot {
-  indexedAt: string; // tracks freshness — compared against meta.json
-  nodes: GraphNode[];
-  relationships: GraphRelationship[];
+export class ClientDisconnectedError extends Error {
+  constructor() {
+    super('Client disconnected during graph stream');
+    this.name = 'ClientDisconnectedError';
+  }
 }
 
-/** Read a cached snapshot if it exists and is still fresh. */
-const readSnapshot = async (storagePath: string): Promise<GraphSnapshot | null> => {
-  try {
-    const snapPath = path.join(storagePath, SNAPSHOT_FILE);
-    const raw = await fs.readFile(snapPath, 'utf-8');
-    const snap: GraphSnapshot = JSON.parse(raw);
-    // Validate freshness against meta.json
-    const meta = await loadMeta(storagePath);
-    if (meta && snap.indexedAt === meta.indexedAt) return snap;
-    return null; // stale
-  } catch {
-    return null;
+export const isIgnorableGraphQueryError = (err: unknown): boolean => {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes('does not exist') ||
+    message.includes('not found') ||
+    message.includes('No table named')
+  );
+};
+
+const ensureStreamIsWritable = (res: express.Response, signal?: AbortSignal): void => {
+  if (signal?.aborted || res.destroyed || res.writableEnded) {
+    throw new ClientDisconnectedError();
   }
 };
 
-/** Write a graph snapshot to disk. */
-const writeSnapshot = async (storagePath: string, snap: GraphSnapshot): Promise<void> => {
-  const snapPath = path.join(storagePath, SNAPSHOT_FILE);
-  await fs.writeFile(snapPath, JSON.stringify(snap), 'utf-8');
-};
+const waitForDrain = async (res: express.Response, signal?: AbortSignal): Promise<void> => {
+  ensureStreamIsWritable(res, signal);
 
-/** Delete a snapshot file. */
-const deleteSnapshot = async (storagePath: string): Promise<void> => {
-  try {
-    await fs.unlink(path.join(storagePath, SNAPSHOT_FILE));
-  } catch {
-    /* file may not exist */
-  }
-};
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      res.off('drain', onDrain);
+      res.off('close', onClose);
+      signal?.removeEventListener('abort', onAbort);
+    };
 
-/** Build graph and cache it, or return from cache if fresh. */
-const getGraphCached = async (
-  storagePath: string,
-): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
-  // Try cache first
-  const cached = await readSnapshot(storagePath);
-  if (cached) return { nodes: cached.nodes, relationships: cached.relationships };
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new ClientDisconnectedError());
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new ClientDisconnectedError());
+    };
 
-  // Build from LadybugDB
-  const lbugPath = path.join(storagePath, 'lbug');
-  const graph = await withLbugDb(lbugPath, async () => buildGraph());
+    res.once('drain', onDrain);
+    res.once('close', onClose);
+    signal?.addEventListener('abort', onAbort, { once: true });
 
-  // Cache to disk asynchronously (don't block the response)
-  const meta = await loadMeta(storagePath);
-  if (meta) {
-    writeSnapshot(storagePath, { indexedAt: meta.indexedAt, ...graph }).catch(() => {});
-  }
-
-  return graph;
-};
-
-/** Pre-warm snapshot caches for all registered repos on server startup. */
-const warmSnapshotCaches = async (): Promise<void> => {
-  const repos = await listRegisteredRepos();
-  for (const repo of repos) {
-    try {
-      const cached = await readSnapshot(repo.storagePath);
-      if (!cached) {
-        console.log(`  Caching graph snapshot for ${repo.name}...`);
-        const lbugPath = path.join(repo.storagePath, 'lbug');
-        const graph = await withLbugDb(lbugPath, async () => buildGraph());
-        const meta = await loadMeta(repo.storagePath);
-        if (meta) {
-          await writeSnapshot(repo.storagePath, { indexedAt: meta.indexedAt, ...graph });
-        }
-        console.log(
-          `  Cached ${repo.name}: ${graph.nodes.length} nodes, ${graph.relationships.length} edges`,
-        );
-      } else {
-        console.log(`  Snapshot cache fresh for ${repo.name}`);
-      }
-    } catch (err: any) {
-      console.warn(`  Failed to cache ${repo.name}: ${err.message}`);
+    if (signal?.aborted || res.destroyed || res.writableEnded) {
+      onAbort();
     }
+  });
+
+  ensureStreamIsWritable(res, signal);
+};
+
+const isClientDisconnectWriteError = (err: unknown): boolean => {
+  if (!(err instanceof Error)) return false;
+  return (
+    (err as NodeJS.ErrnoException).code === 'ERR_STREAM_DESTROYED' ||
+    (err as NodeJS.ErrnoException).code === 'EPIPE' ||
+    (err as NodeJS.ErrnoException).code === 'ECONNRESET' ||
+    err.message.includes('write after end')
+  );
+};
+
+export const writeNdjsonRecord = async (
+  res: express.Response,
+  record: GraphStreamRecord,
+  signal?: AbortSignal,
+): Promise<void> => {
+  ensureStreamIsWritable(res, signal);
+
+  try {
+    const canContinue = res.write(JSON.stringify(record) + '\n');
+    if (!canContinue) {
+      await waitForDrain(res, signal);
+    }
+  } catch (err) {
+    if (isClientDisconnectWriteError(err)) {
+      throw new ClientDisconnectedError();
+    }
+    throw err;
   }
 };
 
@@ -199,67 +204,128 @@ const buildGraph = async (
   const nodes: GraphNode[] = [];
   for (const table of NODE_TABLES) {
     try {
-      let query = '';
-      if (table === 'File') {
-        query = includeContent
-          ? `MATCH (n:File) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.content AS content`
-          : `MATCH (n:File) RETURN n.id AS id, n.name AS name, n.filePath AS filePath`;
-      } else if (table === 'Folder') {
-        query = `MATCH (n:Folder) RETURN n.id AS id, n.name AS name, n.filePath AS filePath`;
-      } else if (table === 'Community') {
-        query = `MATCH (n:Community) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.cohesion AS cohesion, n.symbolCount AS symbolCount`;
-      } else if (table === 'Process') {
-        query = `MATCH (n:Process) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.processType AS processType, n.stepCount AS stepCount, n.communities AS communities, n.entryPointId AS entryPointId, n.terminalId AS terminalId`;
-      } else {
-        query = includeContent
-          ? `MATCH (n:${table}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine, n.content AS content`
-          : `MATCH (n:${table}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine`;
-      }
-
-      const rows = await executeQuery(query);
+      const rows = await executeQuery(getNodeQuery(table, includeContent));
       for (const row of rows) {
-        nodes.push({
-          id: row.id ?? row[0],
-          label: table as GraphNode['label'],
-          properties: {
-            name: row.name ?? row.label ?? row[1],
-            filePath: row.filePath ?? row[2],
-            startLine: row.startLine,
-            endLine: row.endLine,
-            content: includeContent ? row.content : undefined,
-            heuristicLabel: row.heuristicLabel,
-            cohesion: row.cohesion,
-            symbolCount: row.symbolCount,
-            processType: row.processType,
-            stepCount: row.stepCount,
-            communities: row.communities,
-            entryPointId: row.entryPointId,
-            terminalId: row.terminalId,
-          } as GraphNode['properties'],
-        });
+        nodes.push(mapGraphNodeRow(table, row, includeContent));
       }
-    } catch {
-      // ignore empty tables
+    } catch (err) {
+      if (!isIgnorableGraphQueryError(err)) {
+        throw err;
+      }
     }
   }
 
   const relationships: GraphRelationship[] = [];
-  const relRows = await executeQuery(
-    `MATCH (a)-[r:CodeRelation]->(b) RETURN a.id AS sourceId, b.id AS targetId, r.type AS type, r.confidence AS confidence, r.reason AS reason, r.step AS step`,
-  );
+  const relRows = await executeQuery(GRAPH_RELATIONSHIP_QUERY);
   for (const row of relRows) {
-    relationships.push({
-      id: `${row.sourceId}_${row.type}_${row.targetId}`,
-      type: row.type,
-      sourceId: row.sourceId,
-      targetId: row.targetId,
-      confidence: row.confidence,
-      reason: row.reason,
-      step: row.step,
-    });
+    relationships.push(mapGraphRelationshipRow(row));
   }
 
   return { nodes, relationships };
+};
+
+const GRAPH_RELATIONSHIP_QUERY =
+  `MATCH (a)-[r:CodeRelation]->(b) RETURN a.id AS sourceId, b.id AS targetId, ` +
+  `r.type AS type, r.confidence AS confidence, r.reason AS reason, r.step AS step`;
+
+const quoteNodeTable = (table: string): string => `\`${table.replace(/`/g, '``')}\``;
+
+const getNodeQuery = (table: string, includeContent: boolean): string => {
+  const tableLabel = quoteNodeTable(table);
+
+  if (table === 'File') {
+    return includeContent
+      ? `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.content AS content`
+      : `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath`;
+  }
+  if (table === 'Folder') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath`;
+  }
+  if (table === 'Community') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.cohesion AS cohesion, n.symbolCount AS symbolCount`;
+  }
+  if (table === 'Process') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.processType AS processType, n.stepCount AS stepCount, n.communities AS communities, n.entryPointId AS entryPointId, n.terminalId AS terminalId`;
+  }
+  if (table === 'Route') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.responseKeys AS responseKeys, n.errorKeys AS errorKeys, n.middleware AS middleware`;
+  }
+  if (table === 'Tool') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.description AS description`;
+  }
+  return includeContent
+    ? `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine, n.content AS content`
+    : `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine`;
+};
+
+const mapGraphNodeRow = (table: string, row: any, includeContent: boolean): GraphNode => ({
+  id: row.id ?? row[0],
+  label: table as GraphNode['label'],
+  properties: {
+    name: row.name ?? row.label ?? row[1],
+    filePath: row.filePath ?? row[2],
+    startLine: row.startLine,
+    endLine: row.endLine,
+    content: includeContent ? row.content : undefined,
+    responseKeys: row.responseKeys,
+    errorKeys: row.errorKeys,
+    middleware: row.middleware,
+    heuristicLabel: row.heuristicLabel,
+    cohesion: row.cohesion,
+    symbolCount: row.symbolCount,
+    description: row.description,
+    processType: row.processType,
+    stepCount: row.stepCount,
+    communities: row.communities,
+    entryPointId: row.entryPointId,
+    terminalId: row.terminalId,
+  } as GraphNode['properties'],
+});
+
+const mapGraphRelationshipRow = (row: any): GraphRelationship => ({
+  id: `${row.sourceId}_${row.type}_${row.targetId}`,
+  type: row.type,
+  sourceId: row.sourceId,
+  targetId: row.targetId,
+  confidence: row.confidence,
+  reason: row.reason,
+  step: row.step,
+});
+
+export const streamGraphNdjson = async (
+  res: express.Response,
+  includeContent = false,
+  signal?: AbortSignal,
+): Promise<void> => {
+  for (const table of NODE_TABLES) {
+    try {
+      await streamQuery(getNodeQuery(table, includeContent), async (row) => {
+        await writeNdjsonRecord(
+          res,
+          {
+            type: 'node',
+            data: mapGraphNodeRow(table, row, includeContent),
+          },
+          signal,
+        );
+      });
+    } catch (err) {
+      if (!isIgnorableGraphQueryError(err)) {
+        throw err;
+      }
+    }
+  }
+
+  await streamQuery(GRAPH_RELATIONSHIP_QUERY, async (row) => {
+    await writeNdjsonRecord(
+      res,
+      {
+        type: 'relationship',
+        data: mapGraphRelationshipRow(row),
+      },
+      signal,
+    );
+  });
 };
 
 /**
@@ -364,53 +430,37 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
 
   // CORS: allow localhost, private/LAN networks, and the deployed site.
   // Non-browser requests (curl, server-to-server) have no origin and are allowed.
+  // Disallowed origins get the response without Access-Control-Allow-Origin,
+  // so the browser blocks it. We pass `false` instead of throwing an Error to
+  // avoid crashing into Express's default error handler (which returned 500).
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (isAllowedOrigin(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error('Not allowed by CORS'));
-        }
+        callback(null, isAllowedOrigin(origin));
       },
     }),
   );
   app.use(express.json({ limit: '10mb' }));
 
-  // ─── Serve Web UI static files ────────────────────────────────────────────
-  // When the built web UI exists alongside the server package, serve it here.
-  // The web UI needs Cross-Origin Isolation headers for SharedArrayBuffer (WASM).
-  const serverDir = path.dirname(new URL(import.meta.url).pathname);
-  const webDistDir =
-    process.env.GITNEXUS_WEB_DIR ?? path.resolve(serverDir, '../../../gitnexus-web/dist');
+  // Support Chromium Private Network Access (required since Chrome 130+).
+  // Without this header, Chrome/Edge/Brave/Arc block public->loopback requests
+  // which breaks bridge mode entirely.
+  app.use((_req, res, next) => {
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    next();
+  });
 
-  let serveStatic = false;
-  try {
-    await fs.access(path.join(webDistDir, 'index.html'));
-    serveStatic = true;
-  } catch {
-    /* web UI not built — skip */
-  }
-
-  if (serveStatic) {
-    // Required headers for SharedArrayBuffer (used by LadybugDB WASM worker)
-    app.use((req, res, next) => {
-      if (!req.path.startsWith('/api') && !req.path.startsWith('/mcp')) {
-        res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-        res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
-      }
-      next();
-    });
-    app.use(express.static(webDistDir));
-  }
+  // Handle PNA preflight: Chromium sends Access-Control-Request-Private-Network
+  // on OPTIONS requests and expects the allow header in the response.
+  // Note: the actual Allow-Private-Network header is already set by the global
+  // middleware above, so we just need to call next() here.
+  app.options('*', (_req, res, next) => {
+    next();
+  });
 
   // Initialize MCP backend (multi-repo, shared across all MCP sessions)
   const backend = new LocalBackend();
   await backend.init();
-
-  // Warm embedding config cache so isHttpMode() works synchronously
-  const { warmConfigCache } = await import('../core/embeddings/http-client.js');
-  await warmConfigCache();
   const cleanupMcp = mountMCPEndpoints(app, backend);
   const jobManager = new JobManager();
 
@@ -430,12 +480,84 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     activeRepoPaths.delete(repoPath);
   };
 
-  // Helper: resolve a repo by name from the global registry, or default to first
-  const resolveRepo = async (repoName?: string) => {
+  /**
+   * Maximum time the hold-queue will wait for an active analysis job to complete.
+   * Must stay in sync with the frontend's `fetchRepoInfo({ awaitAnalysis: true })` timeout.
+   */
+  const HOLD_QUEUE_TIMEOUT_SECS = 300; // 5 minutes
+
+  // Helper: resolve a repo by name from the global registry, or default to first.
+  // Pass `req` to enable early exit if the client disconnects during the hold-queue wait.
+  const resolveRepo = async (repoName?: string, isRetry = false, req?: any): Promise<any> => {
     const repos = await listRegisteredRepos();
-    if (repos.length === 0) return null;
-    if (repoName) return repos.find((r) => r.name === repoName) || null;
-    return repos[0]; // default to first
+    let found = null;
+
+    // Normalize: if a full path is passed, extract just the basename.
+    // e.g. "C:\Users\LENOVO\.gitnexus\repos\todo.txt-cli" -> "todo.txt-cli"
+    const normalizedName = repoName ? path.basename(repoName) : undefined;
+
+    if (normalizedName) {
+      found =
+        repos.find((r) => r.name === normalizedName) ||
+        repos.find((r) => r.name.toLowerCase() === normalizedName.toLowerCase()) ||
+        null;
+    } else if (repos.length > 0) {
+      found = repos[0]; // default to first repo
+    }
+
+    // If not yet in the registry, check whether a background job is actively cloning or
+    // analyzing this repo. Hold the connection open (up to 5 minutes) until it completes.
+    // We only wait for in-progress jobs ('queued'|'cloning'|'analyzing') — a 'complete' job
+    // whose repo is still missing means the registry sync failed; the fallback below handles it.
+    if (!found && normalizedName) {
+      const lower = normalizedName.toLowerCase();
+
+      // Track client disconnect to cancel the wait early
+      let clientGone = false;
+      req?.on('close', () => {
+        clientGone = true;
+      });
+
+      for (const job of jobManager.listJobs()) {
+        const isMatch =
+          job.repoName?.toLowerCase() === lower ||
+          (job.repoUrl && path.basename(job.repoUrl).replace('.git', '').toLowerCase() === lower) ||
+          (job.repoPath && path.basename(job.repoPath).toLowerCase() === lower);
+
+        if (isMatch && ['queued', 'cloning', 'analyzing'].includes(job.status)) {
+          if (process.env.DEBUG) {
+            console.log(
+              `[debug] resolveRepo waiting for active job ${job.id} (${normalizedName})...`,
+            );
+          }
+          for (let wait = 0; wait < HOLD_QUEUE_TIMEOUT_SECS; wait++) {
+            if (clientGone) return null; // client disconnected — stop polling
+            const currentJob = jobManager.getJob(job.id);
+            if (!currentJob || currentJob.status === 'failed') break;
+            if (currentJob.status === 'complete') {
+              await backend.init();
+              const freshRepos = await listRegisteredRepos();
+              return freshRepos.find((r) => r.name === normalizedName) || null;
+            }
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+          // Timed out — signal to the caller with a specific message
+          return { __timedOut: true, repoName: normalizedName };
+        }
+      }
+    }
+
+    // Emergency fallback: re-sync the registry to handle Windows file-system race conditions
+    // (e.g. registry file not yet flushed after clone completes).
+    if (!found && normalizedName && !isRetry) {
+      if (process.env.DEBUG) {
+        console.log(`[debug] resolveRepo 404 for "${normalizedName}". Triggering deep init...`);
+      }
+      await backend.init();
+      return await resolveRepo(normalizedName, true, req);
+    }
+
+    return found;
   };
 
   // SSE heartbeat — clients connect to detect server liveness instantly.
@@ -498,9 +620,16 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   // Get repo info
   app.get('/api/repo', async (req, res) => {
     try {
-      const entry = await resolveRepo(requestedRepo(req));
+      const entry = await resolveRepo(requestedRepo(req), false, req);
       if (!entry) {
         res.status(404).json({ error: 'Repository not found. Run: gitnexus analyze' });
+        return;
+      }
+      // Timed out waiting for an active analysis job
+      if (entry.__timedOut) {
+        res.status(503).json({
+          error: `Repository analysis for "${entry.repoName}" is taking longer than expected. Please try again in a moment.`,
+        });
         return;
       }
       const meta = await loadMeta(entry.storagePath);
@@ -515,7 +644,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
-  // Delete a repo — removes index and unregisters it
+  // Delete a repo — removes index, clone dir (if any), and unregisters it
   app.delete('/api/repo', async (req, res) => {
     try {
       const repoName = requestedRepo(req);
@@ -547,11 +676,22 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         const storagePath = getStoragePath(entry.path);
         await fs.rm(storagePath, { recursive: true, force: true }).catch(() => {});
 
-        // 2. Unregister from the global registry
+        // 2. Delete the cloned repo dir if it lives under ~/.gitnexus/repos/
+        const cloneDir = getCloneDir(entry.name);
+        try {
+          const stat = await fs.stat(cloneDir);
+          if (stat.isDirectory()) {
+            await fs.rm(cloneDir, { recursive: true, force: true });
+          }
+        } catch {
+          /* clone dir may not exist (local repos) */
+        }
+
+        // 3. Unregister from the global registry
         const { unregisterRepo } = await import('../storage/repo-manager.js');
         await unregisterRepo(entry.path);
 
-        // 3. Reinitialize backend to reflect the removal
+        // 4. Reinitialize backend to reflect the removal
         await backend.init().catch(() => {});
 
         res.json({ deleted: entry.name });
@@ -563,7 +703,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
-  // Get full graph (served from disk cache when available)
+  // Get full graph
   app.get('/api/graph', async (req, res) => {
     try {
       const entry = await resolveRepo(requestedRepo(req));
@@ -571,10 +711,62 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         res.status(404).json({ error: 'Repository not found' });
         return;
       }
-      const graph = await getGraphCached(entry.storagePath);
+      const lbugPath = path.join(entry.storagePath, 'lbug');
+      const includeContent = req.query.includeContent === 'true';
+      const stream = req.query.stream === 'true';
+
+      if (stream) {
+        const abortController = new AbortController();
+        let responseFinished = false;
+        const markFinished = () => {
+          responseFinished = true;
+        };
+        const abortStreaming = () => {
+          if (!responseFinished) {
+            abortController.abort();
+          }
+        };
+
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.flushHeaders();
+
+        req.once('aborted', abortStreaming);
+        res.once('finish', markFinished);
+        res.once('close', abortStreaming);
+
+        try {
+          await withLbugDb(lbugPath, async () =>
+            streamGraphNdjson(res, includeContent, abortController.signal),
+          );
+          if (!abortController.signal.aborted && !res.writableEnded) {
+            res.end();
+          }
+        } finally {
+          req.off('aborted', abortStreaming);
+          res.off('finish', markFinished);
+          res.off('close', abortStreaming);
+        }
+        return;
+      }
+
+      const graph = await withLbugDb(lbugPath, async () => buildGraph(includeContent));
       res.json(graph);
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to build graph' });
+      if (err instanceof ClientDisconnectedError) {
+        return;
+      }
+      const message = err.message || 'Failed to build graph';
+      if (res.headersSent) {
+        try {
+          res.write(JSON.stringify({ type: 'error', error: message }) + '\n');
+        } catch {
+          // Best-effort only after streaming has started.
+        }
+        res.end();
+        return;
+      }
+      res.status(500).json({ error: message });
     }
   });
 
@@ -948,576 +1140,418 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
-  // ─── Ontology Schema API ────────────────────────────────────────────
+  // ── Analyze API ──────────────────────────────────────────────────────
 
-  // GET ontology schema (full)
-  app.get('/api/ontology/schema', async (_req, res) => {
+  // POST /api/analyze — start a new analysis job
+  app.post('/api/analyze', async (req, res) => {
     try {
-      const { loadOntology } = await import('../core/ontology/ontology-manager.js');
-      const schema = await loadOntology();
-      res.json(schema);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+      const { url: repoUrl, path: repoLocalPath, force, embeddings } = req.body;
 
-  // GET ontology summary (compact — for AI agents)
-  app.get('/api/ontology/summary', async (_req, res) => {
-    try {
-      const { loadOntology } = await import('../core/ontology/ontology-manager.js');
-      const schema = await loadOntology();
-      res.json({
-        version: schema.version,
-        name: schema.name,
-        interfaces: schema.interfaces.map((i) => ({
-          apiName: i.apiName,
-          displayName: i.displayName,
-          extends: i.extends,
-          properties: i.properties.map((p) => p.apiName),
-        })),
-        objectTypes: schema.objectTypes.map((ot) => ({
-          apiName: ot.apiName,
-          displayName: ot.displayName,
-          interfaces: ot.interfaces,
-          status: ot.status,
-          sourceLabels: ot.sourceLabels,
-        })),
-        linkTypes: schema.linkTypes.map((lt) => ({
-          apiName: lt.apiName,
-          displayName: lt.displayName,
-          sourceType: lt.sourceType,
-          targetType: lt.targetType,
-          cardinality: lt.cardinality,
-          status: lt.status,
-        })),
-        sharedProperties: schema.sharedProperties.map((sp) => ({
-          apiName: sp.apiName,
-          baseType: sp.baseType,
-        })),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // PUT save custom ontology schema
-  app.put('/api/ontology/schema', async (req, res) => {
-    try {
-      const schema = req.body;
-      if (!schema?.version || !schema?.objectTypes || !schema?.linkTypes) {
-        res
-          .status(400)
-          .json({ error: 'Invalid schema: must have version, objectTypes, linkTypes' });
+      // Input type validation
+      if (repoUrl !== undefined && typeof repoUrl !== 'string') {
+        res.status(400).json({ error: '"url" must be a string' });
         return;
       }
-      const { saveOntology } = await import('../core/ontology/ontology-manager.js');
-      await saveOntology(schema);
-      res.json({
-        status: 'ok',
-        version: schema.version,
-        objectTypes: schema.objectTypes.length,
-        linkTypes: schema.linkTypes.length,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+      if (repoLocalPath !== undefined && typeof repoLocalPath !== 'string') {
+        res.status(400).json({ error: '"path" must be a string' });
+        return;
+      }
 
-  // DELETE reset to default ontology
-  app.delete('/api/ontology/schema', async (_req, res) => {
-    try {
-      const { resetOntology } = await import('../core/ontology/ontology-manager.js');
-      const defaultSchema = await resetOntology();
-      res.json({ status: 'ok', version: defaultSchema.version });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+      if (!repoUrl && !repoLocalPath) {
+        res.status(400).json({ error: 'Provide "url" (git URL) or "path" (local path)' });
+        return;
+      }
 
-  // GET resolve a NodeLabel to its Object Type
-  app.get('/api/ontology/resolve', async (req, res) => {
-    try {
-      const { loadOntology, resolveObjectType, resolveLinkType, getInterfacesForType } =
-        await import('../core/ontology/ontology-manager.js');
-      const schema = await loadOntology();
-      const nodeLabel = req.query.nodeLabel as string | undefined;
-      const relType = req.query.relType as string | undefined;
-
-      const result: any = {};
-      if (nodeLabel) {
-        const objectType = resolveObjectType(schema, nodeLabel);
-        result.objectType = objectType;
-        if (objectType) {
-          result.interfaces = getInterfacesForType(schema, objectType);
+      // Path validation: require absolute path, reject traversal (e.g. /tmp/../etc/passwd)
+      if (repoLocalPath) {
+        if (!path.isAbsolute(repoLocalPath)) {
+          res.status(400).json({ error: '"path" must be an absolute path' });
+          return;
+        }
+        if (path.normalize(repoLocalPath) !== path.resolve(repoLocalPath)) {
+          res.status(400).json({ error: '"path" must not contain traversal sequences' });
+          return;
         }
       }
-      if (relType) {
-        result.linkType = resolveLinkType(schema, relType);
-      }
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
 
-  // ─── Embedding Config API ───────────────────────────────────────────
+      const job = jobManager.createJob({ repoUrl, repoPath: repoLocalPath });
 
-  // GET current embedding configuration (API key masked)
-  app.get('/api/config/embedding', async (_req, res) => {
-    try {
-      const config = await loadCLIConfig();
-      const emb = config.embedding;
-      if (!emb?.url) {
-        res.json({ configured: false });
-        return;
-      }
-      res.json({
-        configured: true,
-        url: emb.url,
-        model: emb.model,
-        dimensions: emb.dimensions,
-        apiKey: emb.apiKey ? `${emb.apiKey.slice(0, 8)}...` : undefined,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // PUT update embedding configuration
-  app.put('/api/config/embedding', async (req, res) => {
-    try {
-      const { url, model, apiKey, dimensions } = req.body;
-      if (!url || !model) {
-        res.status(400).json({ error: 'Missing required fields: url, model' });
-        return;
-      }
-      if (dimensions !== undefined && (!Number.isInteger(dimensions) || dimensions <= 0)) {
-        res.status(400).json({ error: 'dimensions must be a positive integer' });
+      // If job was already running (dedup), just return its id
+      if (job.status !== 'queued') {
+        res.status(202).json({ jobId: job.id, status: job.status });
         return;
       }
 
-      const config = await loadCLIConfig();
-      config.embedding = {
-        url: String(url).replace(/\/+$/, ''),
-        model: String(model),
-        apiKey: apiKey ? String(apiKey) : undefined,
-        dimensions: dimensions ? Number(dimensions) : undefined,
-      };
-      await saveCLIConfig(config);
+      // Mark as active synchronously to prevent race with concurrent requests
+      jobManager.updateJob(job.id, { status: 'cloning' });
 
-      // Apply in-memory so subsequent embed calls use the new config immediately
-      const { setEmbeddingConfig, warmConfigCache } =
-        await import('../core/embeddings/http-client.js');
-      setEmbeddingConfig(config.embedding);
-      await warmConfigCache();
-
-      res.json({
-        status: 'ok',
-        embedding: {
-          url: config.embedding.url,
-          model: config.embedding.model,
-          dimensions: config.embedding.dimensions,
-        },
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // DELETE remove embedding configuration
-  app.delete('/api/config/embedding', async (_req, res) => {
-    try {
-      const config = await loadCLIConfig();
-      delete config.embedding;
-      await saveCLIConfig(config);
-
-      const { setEmbeddingConfig } = await import('../core/embeddings/http-client.js');
-      setEmbeddingConfig(null);
-
-      res.json({ status: 'ok' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // POST test embedding configuration (sends a test query to the endpoint)
-  app.post('/api/config/embedding/test', async (req, res) => {
-    try {
-      const { url, model, apiKey, dimensions } = req.body;
-      if (!url || !model) {
-        res.status(400).json({ error: 'Missing required fields: url, model' });
-        return;
-      }
-
-      // Temporarily apply config for the test
-      const { setEmbeddingConfig } = await import('../core/embeddings/http-client.js');
-      const prevOverride = await import('../core/embeddings/http-client.js').then((m) =>
-        m.getActiveEmbeddingConfig(),
-      );
-      setEmbeddingConfig({ url, model, apiKey, dimensions });
-
-      try {
-        const { httpEmbedQuery } = await import('../core/embeddings/http-client.js');
-        const vec = await httpEmbedQuery('test connection');
-        res.json({
-          status: 'ok',
-          dimensions: vec.length,
-          message: `Embedding endpoint returned ${vec.length}-dimensional vector`,
-        });
-      } catch (testErr: any) {
-        res.status(400).json({ status: 'error', error: testErr.message });
-      } finally {
-        // Restore previous config
-        const prev = await prevOverride;
-        setEmbeddingConfig(prev);
-      }
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ─── Service API (for RemoteBackend clients) ────────────────────────
-
-  // Health check
-  app.get('/api/health', async (_req, res) => {
-    try {
-      const repos = await backend.listRepos();
-      res.json({ status: 'ok', version: pkg.version, repos: repos.length });
-    } catch (err: any) {
-      res.status(500).json({ status: 'error', error: err.message });
-    }
-  });
-
-  // Generic tool dispatch — mirrors backend.callTool(method, params)
-  app.post('/api/tools/:method', async (req, res) => {
-    const method = req.params.method;
-    try {
-      const result = await backend.callTool(method, req.body || {});
-      res.json({ result });
-    } catch (err: any) {
-      res.status(statusFromError(err)).json({ error: err.message || 'Tool call failed' });
-    }
-  });
-
-  // Resource read — mirrors readResource(uri, backend)
-  app.get('/api/resources', async (req, res) => {
-    const uri = req.query.uri as string;
-    if (!uri) {
-      res.status(400).json({ error: 'Missing "uri" query parameter' });
-      return;
-    }
-    try {
-      const content = await readResource(uri, backend);
-      res.json({ content, mimeType: 'text/yaml' });
-    } catch (err: any) {
-      res.status(statusFromError(err)).json({ error: err.message || 'Resource read failed' });
-    }
-  });
-
-  // Internal endpoints for RemoteBackend resource backing
-  app.post('/api/internal/context-info', async (req, res) => {
-    try {
-      const repo = await backend.resolveRepo(req.body?.repoName);
-      const repoId = repo.name.toLowerCase();
-      const context = backend.getContext(repoId) || backend.getContext();
-      res.json({
-        context,
-        repo: { name: repo.name, repoPath: repo.repoPath, lastCommit: repo.lastCommit },
-      });
-    } catch (err: any) {
-      res.status(statusFromError(err)).json({ error: err.message });
-    }
-  });
-
-  app.post('/api/internal/clusters', async (req, res) => {
-    try {
-      const result = await backend.queryClusters(req.body?.repoName, req.body?.limit);
-      res.json(result);
-    } catch (err: any) {
-      res.status(statusFromError(err)).json({ error: err.message });
-    }
-  });
-
-  app.post('/api/internal/processes', async (req, res) => {
-    try {
-      const result = await backend.queryProcesses(req.body?.repoName, req.body?.limit);
-      res.json(result);
-    } catch (err: any) {
-      res.status(statusFromError(err)).json({ error: err.message });
-    }
-  });
-
-  app.post('/api/internal/cluster-detail', async (req, res) => {
-    try {
-      const result = await backend.queryClusterDetail(req.body?.name, req.body?.repoName);
-      res.json(result);
-    } catch (err: any) {
-      res.status(statusFromError(err)).json({ error: err.message });
-    }
-  });
-
-  app.post('/api/internal/process-detail', async (req, res) => {
-    try {
-      const result = await backend.queryProcessDetail(req.body?.name, req.body?.repoName);
-      res.json(result);
-    } catch (err: any) {
-      res.status(statusFromError(err)).json({ error: err.message });
-    }
-  });
-
-  // ─── Graph Management API ───────────────────────────────────────────────
-
-  // List all graph snapshots with their status
-  app.get('/api/graphs', async (_req, res) => {
-    try {
-      const repos = await listRegisteredRepos();
-      const graphs = await Promise.all(
-        repos.map(async (repo) => {
-          const snap = await readSnapshot(repo.storagePath);
-          const meta = await loadMeta(repo.storagePath);
-          return {
-            name: repo.name,
-            path: repo.path,
-            indexedAt: meta?.indexedAt ?? repo.indexedAt,
-            stats: meta?.stats ?? repo.stats ?? {},
-            cached: !!snap,
-            cacheStale: snap ? snap.indexedAt !== meta?.indexedAt : false,
-          };
-        }),
-      );
-      res.json({ graphs });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Force rebuild snapshot cache for a specific repo
-  app.post('/api/graphs/:name/cache', async (req, res) => {
-    try {
-      const repos = await listRegisteredRepos();
-      const repo = repos.find((r) => r.name === req.params.name);
-      if (!repo) {
-        res.status(404).json({ error: 'Repository not found' });
-        return;
-      }
-
-      const lbugPath = path.join(repo.storagePath, 'lbug');
-      const graph = await withLbugDb(lbugPath, async () => buildGraph());
-      const meta = await loadMeta(repo.storagePath);
-      if (meta) {
-        await writeSnapshot(repo.storagePath, { indexedAt: meta.indexedAt, ...graph });
-      }
-      res.json({
-        status: 'ok',
-        nodes: graph.nodes.length,
-        relationships: graph.relationships.length,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Delete snapshot cache for a specific repo
-  app.delete('/api/graphs/:name/cache', async (req, res) => {
-    try {
-      const repos = await listRegisteredRepos();
-      const repo = repos.find((r) => r.name === req.params.name);
-      if (!repo) {
-        res.status(404).json({ error: 'Repository not found' });
-        return;
-      }
-
-      await deleteSnapshot(repo.storagePath);
-      res.json({ status: 'ok' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Rebuild all snapshot caches
-  app.post('/api/graphs/cache-all', async (_req, res) => {
-    try {
-      await warmSnapshotCaches();
-      res.json({ status: 'ok' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ─── Analyze (Index) API ───────────────────────────────────────────────
-  // Spawn `gitnexus analyze` as a child process and stream progress via SSE.
-
-  // Track active analyze jobs so only one runs at a time
-  let activeAnalyzeJob: { proc: ChildProcess; repoPath: string } | null = null;
-
-  /**
-   * POST /api/analyze
-   * Body: { path: string, embeddings?: boolean, force?: boolean }
-   * Response: SSE stream with progress events
-   *
-   * Events:
-   *   data: {"phase":"scanning","percent":30,"message":"Scanning files"}
-   *   data: {"phase":"done","percent":100,"message":"Analysis complete"}
-   *   data: {"phase":"error","message":"..."}
-   */
-  app.post('/api/analyze', async (req, res) => {
-    const { path: repoPath, embeddings, force } = req.body ?? {};
-
-    if (!repoPath || typeof repoPath !== 'string') {
-      res.status(400).json({ error: 'Missing required field: path' });
-      return;
-    }
-
-    // Validate path exists and is a directory
-    try {
-      const stat = await fs.stat(repoPath);
-      if (!stat.isDirectory()) {
-        res.status(400).json({ error: 'Path is not a directory' });
-        return;
-      }
-    } catch {
-      res.status(400).json({ error: 'Path does not exist or is not accessible' });
-      return;
-    }
-
-    if (activeAnalyzeJob) {
-      res.status(409).json({
-        error: 'Analysis already in progress',
-        currentRepo: activeAnalyzeJob.repoPath,
-      });
-      return;
-    }
-
-    // Set up SSE headers
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-
-    const sendEvent = (data: Record<string, unknown>) => {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-
-    // Build args for gitnexus analyze
-    const args = ['analyze', repoPath];
-    if (embeddings) args.push('--embeddings');
-    if (force) args.push('--force');
-    args.push('--skip-git'); // Allow non-git dirs from web UI
-
-    // Find the gitnexus CLI entry point (dist/cli/index.js relative to package root)
-    const serverDir = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
-    const cliPath = path.resolve(serverDir, '../cli/index.js');
-
-    const proc = spawn(process.execPath, [cliPath, ...args], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, FORCE_COLOR: '0' },
-    });
-
-    activeAnalyzeJob = { proc, repoPath };
-
-    sendEvent({ phase: 'started', percent: 0, message: `Analyzing ${path.basename(repoPath)}...` });
-
-    // Parse progress from CLI output (progress bar format: "  ███░░░░ 45% | Scanning files")
-    const parseProgress = (line: string) => {
-      // Match: "  ██████░░ 60% | Phase label (5s)"
-      const barMatch = line.match(/(\d+)%\s*\|\s*(.+)/);
-      if (barMatch) {
-        const percent = parseInt(barMatch[1], 10);
-        const message = barMatch[2].replace(/\s*\(\d+s\)\s*$/, '').trim();
-        sendEvent({ phase: 'progress', percent, message });
-        return;
-      }
-      // Pass through informational messages (non-empty, non-bar lines)
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('█') && !trimmed.startsWith('░')) {
-        sendEvent({ phase: 'info', message: trimmed });
-      }
-    };
-
-    let stdoutBuf = '';
-    proc.stdout?.on('data', (chunk: Buffer) => {
-      stdoutBuf += chunk.toString();
-      // Progress bar uses \r to overwrite — split on both \n and \r
-      const lines = stdoutBuf.split(/[\r\n]+/);
-      stdoutBuf = lines.pop() || '';
-      for (const line of lines) {
-        parseProgress(line);
-      }
-    });
-
-    let stderrBuf = '';
-    proc.stderr?.on('data', (chunk: Buffer) => {
-      stderrBuf += chunk.toString();
-    });
-
-    proc.on('close', async (code) => {
-      activeAnalyzeJob = null;
-      // Flush remaining buffer
-      if (stdoutBuf.trim()) parseProgress(stdoutBuf);
-
-      if (code === 0) {
-        // Rebuild snapshot cache for the new repo so it's ready for the UI
+      // Start async work — don't await
+      (async () => {
+        let targetPath = repoLocalPath;
         try {
-          const repos = await listRegisteredRepos();
-          const repoName = path.basename(repoPath);
-          const repo = repos.find((r) => r.name === repoName || r.path === repoPath);
-          if (repo) {
-            const lbugPath = path.join(repo.storagePath, 'lbug');
-            const graph = await withLbugDb(lbugPath, async () => buildGraph());
-            const meta = await loadMeta(repo.storagePath);
-            if (meta) {
-              await writeSnapshot(repo.storagePath, { indexedAt: meta.indexedAt, ...graph });
+          // Clone if URL provided
+          if (repoUrl && !repoLocalPath) {
+            const repoName = extractRepoName(repoUrl);
+            targetPath = getCloneDir(repoName);
+
+            jobManager.updateJob(job.id, {
+              status: 'cloning',
+              repoName,
+              progress: { phase: 'cloning', percent: 0, message: `Cloning ${repoUrl}...` },
+            });
+
+            await cloneOrPull(repoUrl, targetPath, (progress) => {
+              jobManager.updateJob(job.id, {
+                progress: { phase: progress.phase, percent: 5, message: progress.message },
+              });
+            });
+          }
+
+          if (!targetPath) {
+            throw new Error('No target path resolved');
+          }
+
+          // Acquire shared repo lock (keyed on storagePath to match embed handler)
+          const analyzeLockKey = getStoragePath(targetPath);
+          const lockErr = acquireRepoLock(analyzeLockKey);
+          if (lockErr) {
+            jobManager.updateJob(job.id, { status: 'failed', error: lockErr });
+            return;
+          }
+
+          jobManager.updateJob(job.id, { repoPath: targetPath, status: 'analyzing' });
+
+          // ── Worker fork with auto-retry ──────────────────────────────
+          //
+          // Forks a child process with 8GB heap. If the worker crashes
+          // (OOM, native addon segfault, etc.), it retries up to
+          // MAX_WORKER_RETRIES times with exponential backoff before
+          // marking the job as permanently failed.
+          //
+          // In dev mode (tsx), registers the tsx ESM hook via a file://
+          // URL so the child can compile TypeScript on-the-fly.
+
+          const MAX_WORKER_RETRIES = 2;
+          const callerPath = fileURLToPath(import.meta.url);
+          const isDev = callerPath.endsWith('.ts');
+          const workerFile = isDev ? 'analyze-worker.ts' : 'analyze-worker.js';
+          const workerPath = path.join(path.dirname(callerPath), workerFile);
+          const tsxHookArgs: string[] = isDev
+            ? ['--import', pathToFileURL(_require.resolve('tsx/esm')).href]
+            : [];
+
+          const forkWorker = () => {
+            const currentJob = jobManager.getJob(job.id);
+            if (!currentJob || currentJob.status === 'complete' || currentJob.status === 'failed')
+              return;
+
+            const child = fork(workerPath, [], {
+              execArgv: [...tsxHookArgs, '--max-old-space-size=8192'],
+              stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+            });
+
+            // Capture stderr for crash diagnostics
+            let stderrChunks = '';
+            child.stderr?.on('data', (chunk: Buffer) => {
+              stderrChunks += chunk.toString();
+              if (stderrChunks.length > 4096) stderrChunks = stderrChunks.slice(-4096);
+            });
+
+            child.on('message', (msg: any) => {
+              if (msg.type === 'progress') {
+                jobManager.updateJob(job.id, {
+                  status: 'analyzing',
+                  progress: { phase: msg.phase, percent: msg.percent, message: msg.message },
+                });
+              } else if (msg.type === 'complete') {
+                releaseRepoLock(analyzeLockKey);
+                // Reinitialize backend BEFORE marking complete — ensures the new
+                // repo is queryable when the client receives the SSE complete event.
+                backend
+                  .init()
+                  .then(() => {
+                    jobManager.updateJob(job.id, {
+                      status: 'complete',
+                      repoName: msg.result.repoName,
+                    });
+                  })
+                  .catch((err) => {
+                    console.error('backend.init() failed after analyze:', err);
+                    jobManager.updateJob(job.id, {
+                      status: 'failed',
+                      error: 'Server failed to reload after analysis. Try again.',
+                    });
+                  });
+              } else if (msg.type === 'error') {
+                releaseRepoLock(analyzeLockKey);
+                jobManager.updateJob(job.id, {
+                  status: 'failed',
+                  error: msg.message,
+                });
+              }
+            });
+
+            child.on('error', (err) => {
+              releaseRepoLock(analyzeLockKey);
+              jobManager.updateJob(job.id, {
+                status: 'failed',
+                error: `Worker process error: ${err.message}`,
+              });
+            });
+
+            child.on('exit', (code) => {
+              const j = jobManager.getJob(job.id);
+              if (!j || j.status === 'complete' || j.status === 'failed') return;
+
+              // Worker crashed — attempt retry if under the limit
+              if (j.retryCount < MAX_WORKER_RETRIES) {
+                j.retryCount++;
+                const delay = 1000 * Math.pow(2, j.retryCount - 1); // 1s, 2s
+                const lastErr = stderrChunks.trim().split('\n').pop() || '';
+                console.warn(
+                  `Analyze worker crashed (code ${code}), retry ${j.retryCount}/${MAX_WORKER_RETRIES} in ${delay}ms` +
+                    (lastErr ? `: ${lastErr}` : ''),
+                );
+                jobManager.updateJob(job.id, {
+                  status: 'analyzing',
+                  progress: {
+                    phase: 'retrying',
+                    percent: j.progress.percent,
+                    message: `Worker crashed, retrying (${j.retryCount}/${MAX_WORKER_RETRIES})...`,
+                  },
+                });
+                stderrChunks = '';
+                setTimeout(forkWorker, delay);
+              } else {
+                // Exhausted retries — permanent failure
+                releaseRepoLock(analyzeLockKey);
+                jobManager.updateJob(job.id, {
+                  status: 'failed',
+                  error: `Worker crashed ${MAX_WORKER_RETRIES + 1} times (code ${code})${stderrChunks ? ': ' + stderrChunks.trim().split('\n').pop() : ''}`,
+                });
+              }
+            });
+
+            // Register child for cancellation + timeout tracking
+            jobManager.registerChild(job.id, child);
+
+            // Send start command to child
+            child.send({
+              type: 'start',
+              repoPath: targetPath,
+              options: { force: !!force, embeddings: !!embeddings },
+            });
+          };
+
+          forkWorker();
+        } catch (err: any) {
+          if (targetPath) releaseRepoLock(getStoragePath(targetPath));
+          jobManager.updateJob(job.id, {
+            status: 'failed',
+            error: err.message || 'Analysis failed',
+          });
+        }
+      })();
+
+      res.status(202).json({ jobId: job.id, status: job.status });
+    } catch (err: any) {
+      if (err.message?.includes('already in progress')) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(500).json({ error: err.message || 'Failed to start analysis' });
+      }
+    }
+  });
+
+  // GET /api/analyze/:jobId — poll job status
+  app.get('/api/analyze/:jobId', (req, res) => {
+    const job = jobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    res.json({
+      id: job.id,
+      status: job.status,
+      repoUrl: job.repoUrl,
+      repoPath: job.repoPath,
+      repoName: job.repoName,
+      progress: job.progress,
+      error: job.error,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+    });
+  });
+
+  // GET /api/analyze/:jobId/progress — SSE stream (shared helper)
+  mountSSEProgress(app, '/api/analyze/:jobId/progress', jobManager);
+
+  // DELETE /api/analyze/:jobId — cancel a running analysis job
+  app.delete('/api/analyze/:jobId', (req, res) => {
+    const job = jobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    if (job.status === 'complete' || job.status === 'failed') {
+      res.status(400).json({ error: `Job already ${job.status}` });
+      return;
+    }
+    jobManager.cancelJob(req.params.jobId, 'Cancelled by user');
+    res.json({ id: job.id, status: 'failed', error: 'Cancelled by user' });
+  });
+
+  // ── Embedding endpoints ────────────────────────────────────────────
+
+  const embedJobManager = new JobManager();
+
+  // POST /api/embed — trigger server-side embedding generation
+  app.post('/api/embed', async (req, res) => {
+    try {
+      const entry = await resolveRepo(requestedRepo(req));
+      if (!entry) {
+        res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
+
+      // Check shared repo lock — prevent concurrent analyze + embed on same repo
+      const repoLockPath = entry.storagePath;
+      const lockErr = acquireRepoLock(repoLockPath);
+      if (lockErr) {
+        res.status(409).json({ error: lockErr });
+        return;
+      }
+
+      const job = embedJobManager.createJob({ repoPath: entry.storagePath });
+      embedJobManager.updateJob(job.id, {
+        repoName: entry.name,
+        status: 'analyzing' as any,
+        progress: { phase: 'analyzing', percent: 0, message: 'Starting embedding generation...' },
+      });
+
+      // 30-minute timeout for embedding jobs (same as analyze jobs)
+      const EMBED_TIMEOUT_MS = 30 * 60 * 1000;
+      const embedTimeout = setTimeout(() => {
+        const current = embedJobManager.getJob(job.id);
+        if (current && current.status !== 'complete' && current.status !== 'failed') {
+          releaseRepoLock(repoLockPath);
+          embedJobManager.updateJob(job.id, {
+            status: 'failed',
+            error: 'Embedding timed out (30 minute limit)',
+          });
+        }
+      }, EMBED_TIMEOUT_MS);
+
+      // Run embedding pipeline asynchronously
+      (async () => {
+        try {
+          const lbugPath = path.join(entry.storagePath, 'lbug');
+          await withLbugDb(lbugPath, async () => {
+            const { runEmbeddingPipeline } =
+              await import('../core/embeddings/embedding-pipeline.js');
+            // Fetch existing content hashes for incremental embedding.
+            // Delegated to lbug-adapter which owns the DB query logic and legacy-fallback handling.
+            const { fetchExistingEmbeddingHashes } = await import('../core/lbug/lbug-adapter.js');
+            const existingEmbeddings = await fetchExistingEmbeddingHashes(executeQuery);
+            if (existingEmbeddings && existingEmbeddings.size > 0) {
+              console.log(
+                `[embed] ${existingEmbeddings.size} nodes already embedded — incremental run with content-hash comparison`,
+              );
             }
+            await runEmbeddingPipeline(
+              executeQuery,
+              executeWithReusedStatement,
+              (p) => {
+                embedJobManager.updateJob(job.id, {
+                  progress: {
+                    phase:
+                      p.phase === 'ready' ? 'complete' : p.phase === 'error' ? 'failed' : p.phase,
+                    percent: p.percent,
+                    message:
+                      p.phase === 'loading-model'
+                        ? 'Loading embedding model...'
+                        : p.phase === 'embedding'
+                          ? `Embedding nodes (${p.percent}%)...`
+                          : p.phase === 'indexing'
+                            ? 'Creating vector index...'
+                            : p.phase === 'ready'
+                              ? 'Embeddings complete'
+                              : `${p.phase} (${p.percent}%)`,
+                  },
+                });
+              },
+              {}, // config: use defaults
+              undefined, // skipNodeIds
+              undefined, // context
+              existingEmbeddings,
+            );
+          });
+
+          clearTimeout(embedTimeout);
+          releaseRepoLock(repoLockPath);
+          // Don't overwrite 'failed' if the job was cancelled while the pipeline was running
+          const current = embedJobManager.getJob(job.id);
+          if (!current || current.status !== 'failed') {
+            embedJobManager.updateJob(job.id, { status: 'complete' });
           }
         } catch (err: any) {
-          console.warn('Failed to build snapshot for new repo:', err.message);
+          clearTimeout(embedTimeout);
+          releaseRepoLock(repoLockPath);
+          const current = embedJobManager.getJob(job.id);
+          if (!current || current.status !== 'failed') {
+            embedJobManager.updateJob(job.id, {
+              status: 'failed',
+              error: err.message || 'Embedding generation failed',
+            });
+          }
         }
+      })();
 
-        sendEvent({ phase: 'done', percent: 100, message: 'Analysis complete' });
+      res.status(202).json({ jobId: job.id, status: 'analyzing' });
+    } catch (err: any) {
+      if (err.message?.includes('already in progress')) {
+        res.status(409).json({ error: err.message });
       } else {
-        sendEvent({
-          phase: 'error',
-          message: stderrBuf.trim() || `Analysis failed with exit code ${code}`,
-        });
+        res.status(500).json({ error: err.message || 'Failed to start embedding generation' });
       }
-      res.end();
-    });
-
-    proc.on('error', (err) => {
-      activeAnalyzeJob = null;
-      sendEvent({ phase: 'error', message: `Failed to start analysis: ${err.message}` });
-      res.end();
-    });
-
-    // Handle client disconnect
-    req.on('close', () => {
-      if (activeAnalyzeJob?.proc === proc) {
-        proc.kill('SIGTERM');
-        activeAnalyzeJob = null;
-      }
-    });
-  });
-
-  // Check active analysis status
-  app.get('/api/analyze/status', (_req, res) => {
-    if (activeAnalyzeJob) {
-      res.json({ active: true, repoPath: activeAnalyzeJob.repoPath });
-    } else {
-      res.json({ active: false });
     }
   });
 
-  // SPA fallback — serve index.html for all non-API routes so client-side
-  // routing works (e.g. refreshing on /#repo=GitNexus still loads the app).
-  if (serveStatic) {
-    app.get('*', (req, res, next) => {
-      if (req.path.startsWith('/api') || req.path.startsWith('/mcp')) return next();
-      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-      res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
-      res.sendFile(path.join(webDistDir, 'index.html'));
+  // GET /api/embed/:jobId — poll embedding job status
+  app.get('/api/embed/:jobId', (req, res) => {
+    const job = embedJobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    res.json({
+      id: job.id,
+      status: job.status,
+      repoName: job.repoName,
+      progress: job.progress,
+      error: job.error,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
     });
-  }
+  });
+
+  // GET /api/embed/:jobId/progress — SSE stream (shared helper)
+  mountSSEProgress(app, '/api/embed/:jobId/progress', embedJobManager);
+
+  // DELETE /api/embed/:jobId — cancel embedding job
+  app.delete('/api/embed/:jobId', (req, res) => {
+    const job = embedJobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    if (job.status === 'complete' || job.status === 'failed') {
+      res.status(400).json({ error: `Job already ${job.status}` });
+      return;
+    }
+    embedJobManager.cancelJob(req.params.jobId, 'Cancelled by user');
+    res.json({ id: job.id, status: 'failed', error: 'Cancelled by user' });
+  });
 
   // Global error handler — catch anything the route handlers miss
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -1525,17 +1559,12 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     res.status(500).json({ error: 'Internal server error' });
   });
 
-  // Pre-warm graph snapshot caches on startup (don't block the listener)
-  console.log('Warming graph snapshot caches...');
-  warmSnapshotCaches()
-    .then(() => console.log('Snapshot caches ready.'))
-    .catch((err) => console.warn('Snapshot cache warming failed:', err.message));
-
   // Wrap listen in a promise so errors (EADDRINUSE, EACCES, etc.) propagate
   // to the caller instead of crashing with an unhandled 'error' event.
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(port, host, () => {
-      console.log(`GitNexus server running on http://${host}:${port}`);
+      const displayHost = host === '::' || host === '0.0.0.0' ? 'localhost' : host;
+      console.log(`GitNexus server running on http://${displayHost}:${port}`);
       resolve();
     });
     server.on('error', (err) => reject(err));
@@ -1545,6 +1574,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
       console.log('\nShutting down...');
       server.close();
       jobManager.dispose();
+      embedJobManager.dispose();
       await cleanupMcp();
       await closeLbug();
       await backend.disconnect();

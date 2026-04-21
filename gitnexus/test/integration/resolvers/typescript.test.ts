@@ -58,10 +58,11 @@ describe('TypeScript heritage resolution', () => {
 
   it('emits HAS_METHOD edges linking methods to classes', () => {
     const hasMethod = getRelationships(result, 'HAS_METHOD');
-    expect(hasMethod.length).toBe(4);
+    expect(hasMethod.length).toBe(5);
     expect(edgeSet(hasMethod)).toEqual([
       'BaseService → getName',
       'ConsoleLogger → log',
+      'ILogger → log',
       'UserService → getUsers',
       'UserService → log',
     ]);
@@ -74,7 +75,7 @@ describe('TypeScript heritage resolution', () => {
   });
 
   it('no OVERRIDES edges target Property nodes', () => {
-    const overrides = getRelationships(result, 'OVERRIDES');
+    const overrides = getRelationships(result, 'METHOD_OVERRIDES');
     for (const edge of overrides) {
       const target = result.graph.getNode(edge.rel.targetId);
       expect(target).toBeDefined();
@@ -141,6 +142,49 @@ describe('TypeScript call resolution with arity filtering', () => {
     expect(calls[0].target).toBe('writeAudit');
     expect(calls[0].targetFilePath).toBe('src/one.ts');
     expect(calls[0].rel.reason).toBe('import-resolved');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generic function call resolution: await fn<T>(args) creates CALLS edges
+// ---------------------------------------------------------------------------
+
+describe('TypeScript generic awaited call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(path.join(FIXTURES, 'typescript-generic-calls'), () => {});
+  }, 60000);
+
+  it('resolves authenticateUser → verifyToken via awaited generic call', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const authCall = calls.find(
+      (c) => c.source === 'authenticateUser' && c.target === 'verifyToken',
+    );
+    expect(authCall).toBeDefined();
+    expect(authCall!.targetFilePath).toBe('src/token.ts');
+  });
+
+  it('resolves authenticateAdmin → verifyToken via awaited generic call', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const adminCall = calls.find(
+      (c) => c.source === 'authenticateAdmin' && c.target === 'verifyToken',
+    );
+    expect(adminCall).toBeDefined();
+    expect(adminCall!.targetFilePath).toBe('src/token.ts');
+  });
+
+  it('resolves authenticateGuest → verify via awaited generic member call', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const guestCall = calls.find((c) => c.source === 'authenticateGuest' && c.target === 'verify');
+    expect(guestCall).toBeDefined();
+    expect(guestCall!.targetFilePath).toBe('src/service.ts');
+  });
+
+  it('verifyToken has exactly 2 incoming CALLS edges (both free-call callers resolved)', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const incoming = calls.filter((c) => c.target === 'verifyToken');
+    expect(incoming.length).toBe(2);
   });
 });
 
@@ -518,6 +562,16 @@ describe('TypeScript constructor-inferred type resolution', () => {
     expect(saveMethods.length).toBe(2);
   });
 
+  it('resolves explicit constructor calls for User and Repo', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const userCtor = calls.find((c) => c.target === 'User' && c.targetFilePath === 'src/user.ts');
+    const repoCtor = calls.find((c) => c.target === 'Repo' && c.targetFilePath === 'src/repo.ts');
+    expect(userCtor).toBeDefined();
+    expect(repoCtor).toBeDefined();
+    expect(userCtor!.targetLabel).toBe('Class');
+    expect(repoCtor!.targetLabel).toBe('Class');
+  });
+
   it('resolves user.save() to src/user.ts via constructor-inferred type', () => {
     const calls = getRelationships(result, 'CALLS');
     const userSave = calls.find((c) => c.target === 'save' && c.targetFilePath === 'src/user.ts');
@@ -536,6 +590,14 @@ describe('TypeScript constructor-inferred type resolution', () => {
     const calls = getRelationships(result, 'CALLS');
     const saveCalls = calls.filter((c) => c.target === 'save');
     expect(saveCalls.length).toBe(2);
+  });
+
+  it('resolves constructor calls for both User and Repo', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const userCtor = calls.find((c) => c.target === 'User');
+    const repoCtor = calls.find((c) => c.target === 'Repo');
+    expect(userCtor).toBeDefined();
+    expect(repoCtor).toBeDefined();
   });
 });
 
@@ -885,7 +947,7 @@ describe('TypeScript return type inference via explicit function return type', (
   });
 
   it('resolves user.save() to User#save via return type of getUser(): User', () => {
-    // TS has explicit return types in the source, so extractMethodSignature captures
+    // TS has explicit return types in the source, so the method extractor captures
     // the return type. The TS extractInitializer handles `const user = getUser()`
     // via the variable_declarator path, enabling save() to resolve to User#save.
     const calls = getRelationships(result, 'CALLS');
@@ -2291,5 +2353,283 @@ describe('TypeScript optional parameter arity resolution', () => {
     const calls = getRelationships(result, 'CALLS');
     const searchCalls = calls.filter((c) => c.source === 'process' && c.target === 'search');
     expect(searchCalls.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Method enrichment: abstract, static, parameterTypes, annotations
+// ---------------------------------------------------------------------------
+
+describe('TypeScript method enrichment', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'typescript-method-enrichment'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects Animal and Dog classes', () => {
+    const classes = getNodesByLabel(result, 'Class');
+    expect(classes).toContain('Animal');
+    expect(classes).toContain('Dog');
+  });
+
+  it('emits HAS_METHOD edges for Animal methods', () => {
+    const hasMethod = getRelationships(result, 'HAS_METHOD');
+    const animalMethods = hasMethod
+      .filter((e) => e.source === 'Animal')
+      .map((e) => e.target)
+      .sort();
+    expect(animalMethods).toContain('speak');
+    expect(animalMethods).toContain('classify');
+    expect(animalMethods).toContain('breathe');
+  });
+
+  it('emits HAS_METHOD edge for Dog.speak', () => {
+    const hasMethod = getRelationships(result, 'HAS_METHOD');
+    const dogSpeak = hasMethod.find((e) => e.source === 'Dog' && e.target === 'speak');
+    expect(dogSpeak).toBeDefined();
+  });
+
+  it('emits EXTENDS edge Dog -> Animal', () => {
+    const extends_ = getRelationships(result, 'EXTENDS');
+    const dogExtends = extends_.find((e) => e.source === 'Dog' && e.target === 'Animal');
+    expect(dogExtends).toBeDefined();
+  });
+
+  it('marks abstract speak as isAbstract (conditional)', () => {
+    const methods = getNodesByLabelFull(result, 'Function');
+    const speak = methods.find((n) => n.name === 'speak' && n.properties.filePath === 'animal.ts');
+    if (speak?.properties.isAbstract !== undefined) {
+      expect(speak.properties.isAbstract).toBe(true);
+    }
+  });
+
+  it('marks breathe as NOT isAbstract (conditional)', () => {
+    const methods = getNodesByLabelFull(result, 'Function');
+    const breathe = methods.find((n) => n.name === 'breathe');
+    if (breathe?.properties.isAbstract !== undefined) {
+      expect(breathe.properties.isAbstract).toBe(false);
+    }
+  });
+
+  it('marks classify as isStatic (conditional)', () => {
+    const methods = getNodesByLabelFull(result, 'Function');
+    const classify = methods.find((n) => n.name === 'classify');
+    if (classify?.properties.isStatic !== undefined) {
+      expect(classify.properties.isStatic).toBe(true);
+    }
+  });
+
+  it('marks breathe as NOT isStatic (conditional)', () => {
+    const methods = getNodesByLabelFull(result, 'Function');
+    const breathe = methods.find((n) => n.name === 'breathe');
+    if (breathe?.properties.isStatic !== undefined) {
+      expect(breathe.properties.isStatic).toBe(false);
+    }
+  });
+
+  it('populates parameterTypes for classify (conditional)', () => {
+    const methods = getNodesByLabelFull(result, 'Function');
+    const classify = methods.find((n) => n.name === 'classify');
+    if (classify?.properties.parameterTypes !== undefined) {
+      const params = classify.properties.parameterTypes;
+      expect(params).toContain('string');
+    }
+  });
+
+  it('resolves dog.speak() CALLS edge', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const speakCall = calls.find(
+      (c) => c.target === 'speak' && c.sourceFilePath.includes('app.ts'),
+    );
+    expect(speakCall).toBeDefined();
+  });
+
+  it('resolves Animal.classify("dog") static CALLS edge', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const classifyCall = calls.find(
+      (c) => c.target === 'classify' && c.sourceFilePath.includes('app.ts'),
+    );
+    expect(classifyCall).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Interface dispatch: METHOD_IMPLEMENTS edges
+// ---------------------------------------------------------------------------
+
+describe('TypeScript interface dispatch (METHOD_IMPLEMENTS)', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'typescript-interface-dispatch'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects IRepository interface and SqlRepository class', () => {
+    const classes = getNodesByLabel(result, 'Class');
+    const ifaces = getNodesByLabel(result, 'Interface');
+    expect(classes).toContain('SqlRepository');
+    expect(ifaces).toContain('IRepository');
+  });
+
+  it('emits IMPLEMENTS edge SqlRepository → IRepository', () => {
+    const impl = getRelationships(result, 'IMPLEMENTS');
+    const edge = impl.find((e) => e.source === 'SqlRepository' && e.target === 'IRepository');
+    expect(edge).toBeDefined();
+  });
+
+  it('emits METHOD_IMPLEMENTS edges for find and save', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const findEdge = mi.find(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('sql-repository') &&
+        e.targetFilePath.includes('repository'),
+    );
+    const saveEdge = mi.find(
+      (e) =>
+        e.source === 'save' &&
+        e.target === 'save' &&
+        e.sourceFilePath.includes('sql-repository') &&
+        e.targetFilePath.includes('repository'),
+    );
+    expect(findEdge).toBeDefined();
+    expect(saveEdge).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Overloaded method disambiguation: interface with overloaded find + save,
+// concrete class implements all three. TypeScript overloads collapse to one
+// implementation signature — expect the implementation body, not individual
+// overload signatures.
+// ---------------------------------------------------------------------------
+
+describe('TypeScript overloaded method disambiguation', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(path.join(FIXTURES, 'ts-overload-dispatch'), () => {});
+  }, 60000);
+
+  it('emits METHOD_IMPLEMENTS edge for find', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const findEdge = mi.find(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('sql-repository') &&
+        e.targetFilePath.includes('repository'),
+    );
+    expect(findEdge).toBeDefined();
+  });
+
+  it('emits METHOD_IMPLEMENTS edge for save', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const saveEdge = mi.find(
+      (e) =>
+        e.source === 'save' &&
+        e.target === 'save' &&
+        e.sourceFilePath.includes('sql-repository') &&
+        e.targetFilePath.includes('repository'),
+    );
+    expect(saveEdge).toBeDefined();
+  });
+
+  it('TypeScript overloads collapse — find has one METHOD_IMPLEMENTS edge from implementation body', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    // TS class overload signatures collapse to the implementation body's node ID.
+    // Type-hash is intentionally skipped for TS because overload signatures are
+    // declaration-only contracts, not true same-arity overloads like Java.
+    const findEdges = mi.filter(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('sql-repository') &&
+        e.targetFilePath.includes('repository'),
+    );
+    expect(findEdges.length).toBe(1);
+  });
+});
+
+// ── Phase P: Same-arity overloads — cross-file + chain resolution ─────────
+
+describe('TypeScript same-arity overload cross-file resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(path.join(FIXTURES, 'ts-same-arity-cross-file'), () => {});
+  }, 60000);
+
+  it('DbLookup.find overload signatures collapse to one node (type-hash skipped for TS)', () => {
+    const methods = getNodesByLabelFull(result, 'Method');
+    const findNodes = methods.filter(
+      (m) => m.name === 'find' && m.properties.filePath?.includes('db-lookup'),
+    );
+    // TS overload signatures collapse to the implementation body — 1 node
+    expect(findNodes.length).toBe(1);
+  });
+
+  it('ILookup.find interface declarations collapse to one node (type-hash skipped for TS)', () => {
+    const methods = getNodesByLabelFull(result, 'Method');
+    const findNodes = methods.filter(
+      (m) => m.name === 'find' && m.properties.filePath?.includes('ilookup'),
+    );
+    // Interface overloads also collapse — TS type-hash is skipped
+    expect(findNodes.length).toBe(1);
+  });
+
+  it('emits METHOD_IMPLEMENTS from DbLookup.find → ILookup.find', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const edges = mi.filter(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('db-lookup') &&
+        e.targetFilePath.includes('ilookup'),
+    );
+    expect(edges.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SM-9: lookupMethodByOwnerWithMRO — child.parentMethod() via first-wins walk
+// ---------------------------------------------------------------------------
+
+describe('TypeScript Child extends Parent — inherited method resolution (SM-9)', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'typescript-child-extends-parent'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects Parent and Child classes', () => {
+    const classes = getNodesByLabel(result, 'Class');
+    expect(classes).toContain('Parent');
+    expect(classes).toContain('Child');
+  });
+
+  it('emits EXTENDS edge: Child → Parent', () => {
+    const extends_ = getRelationships(result, 'EXTENDS');
+    expect(edgeSet(extends_)).toContain('Child → Parent');
+  });
+
+  it('resolves c.parentMethod() to Parent.parentMethod via first-wins MRO walk', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const parentMethodCall = calls.find(
+      (c) => c.target === 'parentMethod' && c.targetFilePath.includes('Parent.ts'),
+    );
+    expect(parentMethodCall).toBeDefined();
+    expect(parentMethodCall!.source).toBe('run');
   });
 });

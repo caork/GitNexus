@@ -2,6 +2,166 @@
 
 All notable changes to GitNexus will be documented in this file.
 
+## [Unreleased]
+
+### Performance
+
+- **`analyze` ~33% faster** — moved FTS index creation from the analyze pipeline to first-use lazy initialisation. The 5 `CREATE_FTS_INDEX` calls cost ~440 ms each in LadybugDB regardless of table size (≈2 s fixed overhead) and dominated runtime on small repos and slow CI runners. The cost now amortises across the first `query`/`context` call in a session via a new `ensureFTSIndex` helper. Mini-repo `analyze` measured locally on Windows: 6.4 s → 4.0 s warm; on CI Windows runners (≈3× slower) restores comfortable headroom against the 30 s e2e test budget.
+
+## [1.6.2] - 2026-04-18
+
+### Added
+
+- **Docker support** — containerized ingestion and MCP serving for reproducible runs on CI and container platforms (#848)
+- **Language-agnostic heritage extractor** — config+factory pattern for class-heritage extraction (EXTENDS / IMPLEMENTS), completing the extractor refactor alongside method/field/call/variable (#890)
+- **Language-agnostic call extractor** — config+factory pattern that collapses ~225 lines of inline parse-worker logic into declarative per-language configs (#877)
+- **Language-agnostic variable extractor** — structured metadata for `Const` / `Static` / `Variable` nodes via config+factory pattern (#878)
+- **AST-aware embedding chunking** — offset-based splitting preserves symbol boundaries, improving semantic search precision on large files (#889)
+- **HTTP consumer detection for jQuery and axios object-form** — `$.ajax` / `$.get` / `$.post` and `axios({ url, method })` now recognized as HTTP call sites (#887)
+
+### Fixed
+
+- **Python external dotted imports** — avoid spurious same-file matches when an import path like `foo.bar.baz` refers to a third-party module (#899)
+- **Worker warnings no longer terminate ingestion** — non-fatal parser warnings keep the pipeline running instead of aborting the run (#900, #261)
+- **Global-install upgrade `ENOTEMPTY`** — devendored `tree-sitter-proto` install lifecycle + preinstall cleanup so `npm i -g gitnexus@latest` succeeds on top of an older install (#843, #846)
+- **`env.cacheDir`** now defaults to a user-writable location, unblocking ingestion on systems where the install directory is read-only (#845)
+- **Content-hash staleness detection for embeddings** — zero-node rebuilds no longer skip vector-index creation, fixing semantic search after selective re-analysis (#831)
+- **`tree-sitter-c-sharp` version pin** — locked to 0.23.1 to avoid a breaking change in a transitive prerelease (#834)
+- **`release-drafter` v7 CI** — replaced the removed `disable-releaser` flag with `dry-run` so release-note drafts still work
+- **`npm arborist` crash from `tree-sitter-dart`** — switched the dependency URL format so `npm install` no longer crashes on clean installs
+- **Service-group `ManifestExtractor`** — `config.links` now wires the manifest extractor properly, restoring cross-link discovery that had silently dropped to zero
+
+### Changed
+
+- **SemanticModel wired as a first-class resolution input (SM-20)** — `call-processor`, `resolution-context`, `type-env`, and `heritage-map` now consult `table.model.*` directly; 37 internal call sites migrated off the SymbolTable wrapper (#885)
+- **Per-strategy `ImportSemantics` hooks** — `named` / `wildcard-transitive` / `wildcard-leaf` / `namespace` strategies split into composable hooks, replacing the monolithic conditional (Strategies 1–4 of #886)
+- **Class extraction configs moved to `configs/` subdirectory** — per-language class configs now co-locate with the other extractor configs, completing the extractor layer's directory convention (#879)
+- **CLI AI-context trimmed** — duplicated CLAUDE.md block removed from the shipped context, reducing token usage in LLM-consuming workflows (#904)
+- **LLM context files optimized** — AI-consumed documentation tuned for accuracy and token efficiency (#857)
+- **Workflow concurrency standardized** — all CI workflows adopt the consistent concurrency key pattern documented in CONTRIBUTING.md; release-note labeling automated (#837)
+- **E2E status-ready timeout raised** — 45s accommodates parallel-worker startup variance on CI (#908)
+
+### Chore / Dependencies
+
+- **tree-sitter 0.25 upgrade readiness** — daily Dependabot monitor for the upcoming major-version bump (#847)
+- Dependency bumps: `glob` 11.1.0 → 13.0.6 (#867), `commander` 12.1.0 → 14.0.3 (#868), `@huggingface/transformers` (#869), `@modelcontextprotocol/sdk` (#866), `lru-cache` 11.2.7 → 11.3.5 (#870), `mnemonist` 0.39.8 → 0.40.3 (#871), `@ladybugdb/core` (#873)
+- gitnexus-web dependency bumps: `mermaid` 11.12.2 → 11.14.0 (#860), `tailwindcss` (#861), `jsdom` 29.0.0 → 29.0.2 (#863), `wait-on` 8.0.5 → 9.0.5 (#859), `@vitest/coverage-v8` (#864)
+- GitHub Actions bumps: `actions/checkout` 4.3.1 → 6.0.2 (#842), `actions/upload-artifact` 4.6.2 → 7.0.1 (#838), `actions/setup-node` 4.4.0 → 6.3.0 (#841), `actions/cache` 5.0.4 → 5.0.5 (#840), `actions/github-script` 7.0.1 → 9.0.0 (#850), `dorny/paths-filter` 3.0.2 → 4.0.1 (#839), `amannn/action-semantic-pull-request` 6.1.1 (#853), `release-drafter/release-drafter` 6.0.0 → 7.2.0 (#852), `marocchino/sticky-pull-request-comment` 3.0.4 (#851), `softprops/action-gh-release` 2.5.0 → 3.0.0 (#849)
+
+## [1.6.1] - 2026-04-13
+
+### Added
+- **Service group extractor expansion** — manifest extractor and broader extractor coverage (2/4 of #606 split) (#796)
+- **Dart call patterns** for `await`, cascade, lambda, and widget-tree contexts (#801)
+
+### Fixed
+- **Stack overflow and memory exhaustion** on large repository analysis (#814)
+- **`tree-sitter-dart` install crash** — switched from git URL to npm tarball (#811)
+- **Generic TypeScript awaited function calls** missing from the call graph (#804)
+- **Runtime dependency on `file:../gitnexus-shared`** removed from the published package (#803)
+- **Ruby `singleton_class` context** preserved during sequential parsing (#774)
+
+### Changed
+- **DAG-based ingestion pipeline architecture** — pipeline phases now declare typed dependencies and run via a topologically sorted DAG; container-node logic extracted to `LanguageProvider`. Includes hardened lifecycle (try/finally cleanup, error wrapping, cycle reporting), tightened `ParseOutput.exportedTypeMap` immutability, and corrected phase dependencies (#809)
+
+## [1.6.0] - 2026-04-12
+
+### Added
+- **SemanticModel architecture refactor (SM-8 through SM-19)** — extracted registries into `model/` module with ISP-compliant interfaces: TypeRegistry, MethodRegistry, FieldRegistry, RegistrationTable, ResolutionContext (#786)
+  - HeritageMap built from accumulated `ExtractedHeritage[]` for MRO-aware resolution (#739)
+  - `lookupMethodByOwnerWithMRO` using HeritageMap for cross-class method dispatch (#740)
+  - MRO fast path before D2 fuzzy widening in call resolution (#741)
+  - BindingAccumulator for cross-file return type propagation (#743, #763)
+  - Restructured `resolveUncached` replacing `lookupFuzzy` data source for all tiers (#764)
+  - Deleted `lookupFuzzy`, `lookupFuzzyCallable`, `globalIndex`, `callableIndex` — replaced with structured lookups (#769)
+  - Deleted `resolveCallTarget` god-method — replaced with thin dispatcher delegating to `resolveMemberCall` (#744), `resolveStaticCall` (#754), `resolveFreeCall` (#756) (#770)
+- **Service group infrastructure** — service boundary detection, contract extractors, sync pipeline, CLI/MCP tools, monorepo fixture; bridge.lbug storage and contract matching expansion (#795)
+- **C# interface-to-interface heritage** capture (#789)
+- **Vue SFC support** with destructured call result tracking (#604)
+- **Java method reference** resolution — `obj::method` as call sites (#622)
+- **C/C++ MethodExtractor** config with pure virtual detection (#617)
+- **MethodExtractor configs** for Python, PHP, Swift, Dart, Rust, Ruby (#624)
+- **METHOD_IMPLEMENTS edges** with overload disambiguation and MethodExtractor unification (#642)
+- **Same-arity overload disambiguation** via type-hash suffix (#658)
+- **`GITNEXUS_HOME` env var** to customize global directory (#746)
+- **Verbose analyze output** prints skipped large file paths (#745)
+- **Class name lookup index** for O(1) qualified lookups (#707, #716)
+- **`lookupMethodByOwner` index** for O(1) cross-class chain resolution (#665)
+- **Fuzzy lookup counters** for performance visibility (#708)
+
+### Fixed
+- **Stack overflow on large PHP files** — iterative AST traversal (#783)
+- **Large repository graph loading** failure (#732)
+- **Windows multi-repo switching** — false 404 errors and stale repo context (#633)
+- **`detect_changes` diff mapping** — map diff hunks to symbol line ranges (#779)
+- **HTTP client vs Express route detection** and Spring interface attribution (#780)
+- **VECTOR extension** not loaded during DB init for semantic search (#782)
+- **tree-sitter-swift** postinstall patch for macOS ARM64 (#788)
+- **tree-sitter-c** peer dependency conflict pinned (#723)
+- **Constructor indexing** in methodByOwner (#694, #753)
+- **Named binding processor** — `lookupExact` replaced with `lookupExactAll` (#755)
+- **`.gitnexusignore` negation patterns** now respected (#654)
+- **MCP setup** prefers global gitnexus binary over npx (#653)
+- **CORS rejection** returns clean error instead of 500 (#646)
+- **Array.push stack overflow** — replaced spread with loop (#650)
+- **MCP stdout silencing** prevents embedder/pool-adapter conflicts (#645)
+- **Web heartbeat** — graceful reconnection replaces aggressive disconnect (#643)
+- **Web repo scoping** — backend calls scoped to active repo (#644)
+- **OpenCode config path** and FTS extension load order (#781)
+- **OnboardingGuide** dev-mode serve command corrected (#725)
+- **Security issues** and critical bugs from code review (#709)
+
+### Changed
+- Replaced class-type fuzzy lookups with structured indices in type-env (#733, #734, #736)
+- Extracted `CLASS_LIKE_TYPES` constant (#693)
+
+## [1.5.3] - 2026-04-01
+
+### Added
+- **TypeScript/JavaScript MethodExtractor** config (#588)
+
+### Fixed
+- **Wiki Azure OpenAI** compat and HTML viewer script injection (#618)
+
+## [1.5.2] - 2026-04-01
+
+### Fixed
+- **`gitnexus-shared` module not found** — `gitnexus-shared` was a `file:` workspace dependency never published to npm, causing `ERR_MODULE_NOT_FOUND` when installing `gitnexus` globally. The build now bundles shared code into `dist/_shared/` and rewrites imports to relative paths (#613)
+- **v1.5.1 publish regression** — npm's `prepare` lifecycle ran `tsc` after `prepack`, overwriting the rewritten imports before packing; both scripts now run the full build so the final tarball is always correct
+
+## [1.5.1] - 2026-04-01 [YANKED]
+
+### Fixed
+- Incomplete fix for `gitnexus-shared` bundling — `prepare` script overwrote rewritten imports during publish
+
+## [1.5.0] - 2026-04-01
+
+### Added
+- **Repo landing screen** — when the backend detects indexed repositories, the web UI now shows a landing page with selectable repo cards (name, stats, indexed date) instead of auto-loading the first repo; users can also analyze new repos directly from the landing screen (#607)
+- **Unified web & CLI ingestion pipeline** — complete architectural migration of the web app from a self-contained WASM browser app to a thin client backed by the CLI server; new `gitnexus-shared` package for cross-package type unification (#536)
+  - New server endpoints: `/api/heartbeat` (SSE liveness), `/api/info`, `/api/repos`, `/api/file`, `/api/grep`, `/api/analyze` (SSE progress), `/api/embed`, `/api/mcp` (MCP-over-StreamableHTTP)
+  - Onboarding flow: auto-detect server → connect → repo landing or analyze
+  - Header repo dropdown: switch, re-analyze, or delete repos
+- **Azure OpenAI support for wiki command** — fixed broken Azure auth (`api-key` header), `api-version` URL parameter, reasoning model handling (`max_completion_tokens`, no `temperature`), content filter error messages; added interactive setup wizard, `--api-version` and `--reasoning-model` CLI flags (#562)
+- **Java method references & interface dispatch** — `obj::method` treated as call sites, overload selection via typed variable args (not just literals), interface dispatch emits additional CALLS edges to implementing classes (#540)
+- **MethodExtractor abstraction** — structured method metadata extraction (isAbstract, isFinal, annotations, visibility, parameter types) with config-driven factory pattern (#576)
+  - Java and Kotlin configs with overload-safe `methodInfoCache` keyed by `name:line`
+  - C# config with `sealed`, `params`/`out`/`ref`/optional parameters, `[Attribute]` syntax, `internal` visibility (#582)
+- **`--skip-agents-md` CLI flag** — opt out of overwriting GitNexus-managed sections in AGENTS.md and CLAUDE.md during `gitnexus analyze` (#517)
+- **Prettier** — monorepo-wide code formatter with lint-staged + Husky pre-commit hook, `.prettierrc` config, Tailwind CSS v4 plugin, `endOfLine: "lf"` + `.gitattributes` for Windows consistency (#563)
+- **ESLint v9** — flat config with `unused-imports` auto-removal, `@typescript-eslint` rules, React hooks rules, CI `lint` job (#564)
+
+### Fixed
+- **OpenCode MCP configuration** — corrected README MCP setup for OpenCode which requires `command` as an array containing both executable and arguments (#363)
+- **litellm security** — excluded vulnerable versions 1.82.7 and 1.82.8 in eval harness `pyproject.toml` (#580)
+
+### Changed
+- **Reduced explicit `any` types** — 128 `no-explicit-any` warnings eliminated (689 → 561, 19% reduction) across `NodeProperties` index signature, ~80 `SyntaxNode` substitutions, typed worker protocol, and graphology community detection (#566)
+
+### Docs
+- Added `gitnexus-shared` build step to web UI quick start instructions (#585)
+- Added enterprise offering section to README (#579)
+
 ## [1.4.10] - 2026-03-27
 
 ### Fixed

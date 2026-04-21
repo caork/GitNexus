@@ -88,7 +88,7 @@ export const StatusBar = () => {
       )}
 
       {/* Right - Stats */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3" data-testid="graph-stats">
         {graph && (
           <>
             <span>{nodeCount} nodes</span>

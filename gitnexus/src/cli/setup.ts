@@ -9,7 +9,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { execFile } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { glob } from 'glob';
@@ -26,22 +26,52 @@ interface SetupResult {
 }
 
 /**
- * The MCP server entry for all editors.
- * On Windows, npx must be invoked via cmd /c since it's a .cmd script.
+ * Resolve the absolute path to the `gitnexus` binary if it's installed
+ * globally (or via npm -g / yarn global). Returns null when not found.
  */
-function getMcpEntry(remoteUrl?: string) {
-  const baseArgs = ['-y', 'gitnexus@latest', 'mcp'];
-  if (remoteUrl) baseArgs.push('--remote', remoteUrl);
+function resolveGitnexusBin(): string | null {
+  try {
+    const cmd = process.platform === 'win32' ? 'where' : 'which';
+    const resolved = execFileSync(cmd, ['gitnexus'], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .split('\n')[0]
+      .trim();
+    return resolved || null;
+  } catch {
+    return null;
+  }
+}
 
+/**
+ * The MCP server entry for all editors.
+ *
+ * Prefers the globally-installed `gitnexus` binary (starts in ~1 s) over
+ * `npx -y gitnexus@latest` (cold-cache install of native deps can take
+ * >60 s, exceeding Claude Code's 30 s MCP connection timeout).
+ *
+ * Falls back to npx when the binary isn't on PATH — e.g. first-time
+ * users who ran `npx gitnexus analyze` but haven't done `npm i -g`.
+ */
+function getMcpEntry() {
+  const bin = resolveGitnexusBin();
+
+  if (bin) {
+    return { command: bin, args: ['mcp'] };
+  }
+
+  // Fallback: npx (works without a global install, but slow cold-start)
   if (process.platform === 'win32') {
     return {
       command: 'cmd',
-      args: ['/c', 'npx', ...baseArgs],
+      args: ['/c', 'npx', '-y', 'gitnexus@latest', 'mcp'],
     };
   }
   return {
     command: 'npx',
-    args: baseArgs,
+    args: ['-y', 'gitnexus@latest', 'mcp'],
   };
 }
 
@@ -49,9 +79,6 @@ function getMcpEntry(remoteUrl?: string) {
  * Merge gitnexus entry into an existing MCP config JSON object.
  * Returns the updated config.
  */
-/** Module-level remote URL — set by setupCommand when --remote is passed */
-let _remoteUrl: string | undefined;
-
 function mergeMcpConfig(existing: any): any {
   if (!existing || typeof existing !== 'object') {
     existing = {};
@@ -59,7 +86,7 @@ function mergeMcpConfig(existing: any): any {
   if (!existing.mcpServers || typeof existing.mcpServers !== 'object') {
     existing.mcpServers = {};
   }
-  existing.mcpServers.gitnexus = getMcpEntry(_remoteUrl);
+  existing.mcpServers.gitnexus = getMcpEntry();
   return existing;
 }
 
@@ -238,12 +265,12 @@ async function setupOpenCode(result: SetupResult): Promise<void> {
     return;
   }
 
-  const configPath = path.join(opencodeDir, 'config.json');
+  const configPath = path.join(opencodeDir, 'opencode.json');
   try {
     const existing = await readJsonFile(configPath);
     const config = existing || {};
     if (!config.mcp) config.mcp = {};
-    config.mcp.gitnexus = getMcpEntry(_remoteUrl);
+    config.mcp.gitnexus = getMcpEntry();
     await writeJsonFile(configPath, config);
     result.configured.push('OpenCode');
   } catch (err: any) {
@@ -255,7 +282,7 @@ async function setupOpenCode(result: SetupResult): Promise<void> {
  * Build a TOML section for Codex MCP config (~/.codex/config.toml).
  */
 function getCodexMcpTomlSection(): string {
-  const entry = getMcpEntry(_remoteUrl);
+  const entry = getMcpEntry();
   const command = JSON.stringify(entry.command);
   const args = `[${entry.args.map((arg) => JSON.stringify(arg)).join(', ')}]`;
   return `[mcp_servers.gitnexus]\ncommand = ${command}\nargs = ${args}\n`;
@@ -291,7 +318,7 @@ async function setupCodex(result: SetupResult): Promise<void> {
   }
 
   try {
-    const entry = getMcpEntry(_remoteUrl);
+    const entry = getMcpEntry();
     await execFileAsync('codex', ['mcp', 'add', 'gitnexus', '--', entry.command, ...entry.args], {
       shell: process.platform === 'win32',
     });
@@ -446,8 +473,7 @@ async function installCodexSkills(result: SetupResult): Promise<void> {
 
 // ─── Main command ──────────────────────────────────────────────────
 
-export const setupCommand = async (options?: { remote?: string }) => {
-  _remoteUrl = options?.remote;
+export const setupCommand = async () => {
   console.log('');
   console.log('  GitNexus Setup');
   console.log('  ==============');
