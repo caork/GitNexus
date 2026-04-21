@@ -25,7 +25,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { GITNEXUS_TOOLS } from './tools.js';
 import { realStdoutWrite } from './core/lbug-adapter.js';
-import type { Backend } from './backend.js';
+import type { LocalBackend } from './local/local-backend.js';
 import { getResourceDefinitions, getResourceTemplates, readResource } from './resources.js';
 
 /**
@@ -81,7 +81,7 @@ function getNextStepHint(toolName: string, args: Record<string, any> | undefined
  * Create a configured MCP Server with all handlers registered.
  * Transport-agnostic — caller connects the desired transport.
  */
-export function createMCPServer(backend: Backend): Server {
+export function createMCPServer(backend: LocalBackend): Server {
   const require = createRequire(import.meta.url);
   const pkgVersion: string = require('../../package.json').version;
   const server = new Server(
@@ -283,7 +283,7 @@ Follow these steps:
 /**
  * Start the MCP server on stdio transport (for CLI use).
  */
-export async function startMCPServer(backend: Backend): Promise<void> {
+export async function startMCPServer(backend: LocalBackend): Promise<void> {
   const server = createMCPServer(backend);
 
   // Use the shared stdout reference captured at module-load time by the
