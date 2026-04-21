@@ -8,16 +8,51 @@
 
 ## ⚡ 推荐方案：零安装直连公共测试服务器（免算力开销）
 
-我们已经在远端的公用服务器（内网地址根据分配为准，以下假设为 `192.168.1.100`）运行了全量仓库的知识图谱索引与通信后端。作为终端用户，你**无需在本地安装任何额外的 GitNexus 环境**，所有分析和查询压力均通过通道转移在核心服务端集中处理！
+我们已经在远端的公用服务器（内网地址根据分配为准，以下假设为 `192.168.1.100`）运行了全量仓库的知识图谱索引与通信后端。作为终端用户，你**无需在本地安装任何额外的 GitNexus 环境**，所有分析和查询压力均通过通道转移在核心服务端集中处理！你可以通过以下两种方式连接到该服务器：
 
-### 前置要求（面向普通使用者）
-- 你的电脑能够通过 SSH 登陆研发内网服务器 `192.168.1.100`。
-
-### 挂载操作 (一键完成)
-在你本地正工作的任何开发根目录下，呼出终端并使用您的 SSH 用户名配置 Claude Code 的 MCP 挂载点：
+### 挂载方式一：SSH 隧道直连（推荐，免写代码）
+如果你有这台内网服务器的 SSH 登录权限，可以直接通过底层的数据管道透传！
+在你本地正工作的任何开发根目录下，配置 Claude Code：
 
 ```bash
 claude mcp add gitnexus -- ssh <你的用户名>@192.168.1.100 "cd /远程代码主仓库绝对路径 && gitnexus mcp"
+```
+
+### 挂载方式二：JS Proxy 代理脚本连接（适用于无 SSH 权限，纯 HTTP 网络环境）
+如果团队为了安全没有开放 SSH，但该内网服务器能够直接访问（即 `http://192.168.1.100:4747/...` 开放）。
+系统支持原生的 Server-Sent Events (SSE) 协议进行穿透。请在本地新建一个名为 `proxy.js` 的文件，填入以下透传代码：
+
+```javascript
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import readline from "node:readline";
+
+// 替换为您服务器的真实内网地址和端口
+const transport = new SSEClientTransport(new URL("http://192.168.1.100:4747/api/mcp"));
+
+async function start() {
+  await transport.start();
+
+  transport.onmessage = (message) => {
+    console.log(JSON.stringify(message));
+  };
+
+  const rl = readline.createInterface({ input: process.stdin });
+  rl.on("line", async (line) => {
+    try {
+      const msg = JSON.parse(line);
+      await transport.send(msg);
+    } catch (e) {
+      // 忽略无效心跳
+    }
+  });
+}
+start().catch(console.error);
+```
+**前置安装 SDK 工具包**：在这份脚本所在的目录下执行 `npm install @modelcontextprotocol/sdk`。
+
+**完成挂载**：在同一目录下向 Claude Code 提交该入口：
+```bash
+claude mcp add gitnexus -- node proxy.js
 ```
 
 配置成功后正常启动 `claude`，你的 AI 助手便拥有了超级权限。直接吩咐它 *“帮我在整个群组服务中分析这段接口如果修改，它上下游的爆炸半径是多少”* 即可体验！
