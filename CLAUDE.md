@@ -1,4 +1,4 @@
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!--
   Metadata: version, last reviewed, scope, model policy, reference docs, changelog.
   Last updated: 2026-03-22
@@ -9,6 +9,15 @@ Last reviewed: 2026-04-13
 **Project:** GitNexus · **Environment:** dev · **Maintainer:** repository maintainers (see GitHub)
 
 Follow **AGENTS.md** for the canonical rules; this file adds Claude Code–specific deltas. Cursor-specific notes live only in `AGENTS.md`.
+
+## Fork development policy
+
+This checkout is a **fork** of `abhigyanpatwari/GitNexus` (upstream = `origin`, our fork = `fork` → `caork/GitNexus`).
+
+- **All commits and pushes go to `fork` only.** Never push to `origin` / upstream.
+- **Branching:** work directly on `main`; do not create `feat/*` or other topic branches.
+- **Upstream sync:** pull from `origin/main` → merge into local `main` → push to `fork`.
+- **Offline-at-startup is a preserved invariant:** `gitnexus serve` and `gitnexus mcp` must not trigger network downloads at startup. Embedding models are opt-in via `gitnexus analyze --embeddings` (or configured via the post-startup embedding API); pre-download anything else before running.
 
 ## Scope
 
@@ -42,6 +51,7 @@ If always-on instructions grow, load deep conventions via conditional reads (e.g
 
 | Date | Version | Change |
 |------|---------|--------|
+| 2026-04-21 | 1.4.0 | Added fork-development policy (push to `fork` only, offline-at-startup invariant). |
 | 2026-04-13 | 1.3.0 | Updated GitNexus index stats after DAG refactor. |
 | 2026-03-24 | 1.2.0 | Removed duplicated gitnexus:start block and scope table; replaced with pointers to AGENTS.md. |
 | 2026-03-23 | 1.1.0 | Updated agent instructions to match AGENTS.md. |
