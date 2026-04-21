@@ -319,11 +319,27 @@ flowchart TD
 
 ---
 
+## Archive Upload API
+
+Upload code archives for server-side extraction and analysis:
+
+| Method | Endpoint      | Purpose                                                  |
+| ------ | ------------- | -------------------------------------------------------- |
+| `POST` | `/api/upload` | Upload archive (`multipart/form-data`, field: `archive`) |
+
+Supported formats: `.zip`, `.tar`, `.tar.gz`, `.tgz` (max 500 MB).
+
+Response: `{ path: string, name: string, extractedTo: string }`
+
+After uploading, call `POST /api/analyze` with the returned `path` to index the extracted codebase.
+
+---
+
 ## Web UI (browser-based)
 
 A fully client-side graph explorer and AI chat. No server, no install — your code never leaves the browser.
 
-**Try it now:** [gitnexus.vercel.app](https://gitnexus.vercel.app) — drag & drop a ZIP and start exploring.
+**Try it now:** [gitnexus.vercel.app](https://gitnexus.vercel.app) — paste a GitHub URL, pick a local folder, or upload a code archive and start exploring.
 
 <img width="2550" height="1343" alt="gitnexus_img" src="https://github.com/user-attachments/assets/cc5d637d-e0e5-48e6-93ff-5bcfdb929285" />
 
@@ -486,6 +502,8 @@ clusters actually need.
 - [.env.example](.env.example) — overrides for image names, container names, ports, and the workspace mount.
 
 The web UI uses the same indexing pipeline as the CLI but runs entirely in WebAssembly (Tree-sitter WASM, LadybugDB WASM, in-browser embeddings). It's great for quick exploration but limited by browser memory for larger repos.
+
+**Archive Upload:** The web UI supports uploading code archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`) up to 500 MB. The archive is extracted server-side and analyzed automatically — useful for codebases that aren't in a git repo or accessible via URL. Archives containing a single top-level directory are automatically unwrapped.
 
 **Local Backend Mode:** Run `gitnexus serve` and open the web UI locally — it auto-detects the server and shows all your indexed repos, with full AI chat support. No need to re-upload or re-index. The agent's tools (Cypher queries, search, code navigation) route through the backend HTTP API automatically.
 

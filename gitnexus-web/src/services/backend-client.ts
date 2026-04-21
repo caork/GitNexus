@@ -658,6 +658,59 @@ export const startAnalyze = async (request: {
   return response.json() as Promise<{ jobId: string; status: string }>;
 };
 
+/** Upload an archive file and start analysis. Returns the analysis job info. */
+export const uploadArchive = async (
+  file: File,
+  onUploadProgress?: (percent: number) => void,
+): Promise<{ path: string; name: string }> => {
+  const formData = new FormData();
+  formData.append('archive', file);
+
+  // Use XMLHttpRequest for upload progress tracking
+  const uploadResult = await new Promise<{ path: string; name: string }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${_backendUrl}/api/upload`);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onUploadProgress) {
+        onUploadProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          reject(new BackendError('Invalid response from server', xhr.status, 'server'));
+        }
+      } else {
+        try {
+          const body = JSON.parse(xhr.responseText);
+          reject(
+            new BackendError(body.error || `Upload failed (${xhr.status})`, xhr.status, 'server'),
+          );
+        } catch {
+          reject(new BackendError(`Upload failed (${xhr.status})`, xhr.status, 'server'));
+        }
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new BackendError('Network error during upload', 0, 'network'));
+    };
+
+    xhr.timeout = 300_000; // 5 minutes for large files
+    xhr.ontimeout = () => {
+      reject(new BackendError('Upload timed out', 0, 'timeout'));
+    };
+
+    xhr.send(formData);
+  });
+
+  return uploadResult;
+};
+
 /** Poll analysis job status. */
 export const getAnalyzeStatus = async (jobId: string): Promise<JobStatus> => {
   const response = await fetchWithTimeout(

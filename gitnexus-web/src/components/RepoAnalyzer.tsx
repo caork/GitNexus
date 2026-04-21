@@ -1,9 +1,10 @@
 /**
  * RepoAnalyzer
  *
- * Two input modes:
+ * Three input modes:
  *   - "github"  → GitHub URL (https://github.com/owner/repo)
  *   - "local"   → Select a local folder via the browser's native directory picker
+ *   - "archive" → Upload a code archive (.zip, .tar, .tar.gz, .tgz)
  */
 
 import { useState, useRef, useEffect, useId } from 'react';
@@ -15,18 +16,21 @@ import {
   ArrowRight,
   AlertCircle,
   Sparkles,
+  FileArchive,
+  Upload,
 } from '@/lib/lucide-icons';
 import {
   startAnalyze,
   cancelAnalyze,
   streamAnalyzeProgress,
+  uploadArchive,
   type JobProgress,
 } from '../services/backend-client';
 import { AnalyzeProgress } from './AnalyzeProgress';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-type InputMode = 'github' | 'local';
+type InputMode = 'github' | 'local' | 'archive';
 
 const GITHUB_RE = /^https?:\/\/(www\.)?github\.com\/[^/\s]+\/[^/\s]+/i;
 const IS_WINDOWS = navigator.userAgent.toLowerCase().includes('win');
@@ -65,6 +69,19 @@ function ModeTabs({ mode, onChange }: { mode: InputMode; onChange: (m: InputMode
       >
         <FolderOpen className="h-3 w-3" />
         Local Folder
+      </button>
+      <button
+        role="tab"
+        aria-selected={mode === 'archive'}
+        onClick={() => onChange('archive')}
+        className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+          mode === 'archive'
+            ? 'bg-accent text-white shadow-sm'
+            : 'text-text-muted hover:text-text-secondary'
+        } `}
+      >
+        <FileArchive className="h-3 w-3" />
+        Upload Archive
       </button>
     </div>
   );
@@ -139,6 +156,9 @@ export const RepoAnalyzer = ({ variant, onComplete, onCancel }: RepoAnalyzerProp
   const [mode, setMode] = useState<InputMode>('github');
   const [githubUrl, setGithubUrl] = useState('');
   const [localPath, setLocalPath] = useState('');
+  const [archiveFile, setArchiveFile] = useState<File | null>(null);
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const archiveInputRef = useRef<HTMLInputElement>(null);
   const [phase, setPhase] = useState<InternalPhase>('input');
   const [validationError, setValidationError] = useState<string | null>(null);
   const [progress, setProgress] = useState<JobProgress>({
@@ -163,6 +183,8 @@ export const RepoAnalyzer = ({ variant, onComplete, onCancel }: RepoAnalyzerProp
     setMode(m);
     setGithubUrl('');
     setLocalPath('');
+    setArchiveFile(null);
+    setUploadPercent(0);
     setValidationError(null);
   };
 
@@ -175,7 +197,9 @@ export const RepoAnalyzer = ({ variant, onComplete, onCancel }: RepoAnalyzerProp
   const canSubmit =
     mode === 'github'
       ? isValidGithubUrl(githubUrl) && (phase === 'input' || phase === 'error')
-      : localPath.trim().length > 1 && (phase === 'input' || phase === 'error');
+      : mode === 'local'
+        ? localPath.trim().length > 1 && (phase === 'input' || phase === 'error')
+        : !!archiveFile && (phase === 'input' || phase === 'error');
 
   const handleAnalyze = async () => {
     if (mode === 'github' && !isValidGithubUrl(githubUrl)) {
@@ -186,17 +210,38 @@ export const RepoAnalyzer = ({ variant, onComplete, onCancel }: RepoAnalyzerProp
       setValidationError('Please enter a folder path.');
       return;
     }
+    if (mode === 'archive' && !archiveFile) {
+      setValidationError('Please select an archive file.');
+      return;
+    }
 
     setValidationError(null);
     setPhase('starting');
 
     try {
-      const request = mode === 'github' ? { url: githubUrl.trim() } : { path: localPath.trim() };
+      let request: { url?: string; path?: string };
+
+      if (mode === 'archive') {
+        // Step 1: Upload and extract the archive
+        // archiveFile is guaranteed non-null by canSubmit check above
+        const file = archiveFile as File;
+        const result = await uploadArchive(file, (pct) => setUploadPercent(pct));
+        // Step 2: Start analysis on the extracted path
+        request = { path: result.path };
+      } else {
+        request = mode === 'github' ? { url: githubUrl.trim() } : { path: localPath.trim() };
+      }
+
       const { jobId } = await startAnalyze(request);
       jobIdRef.current = jobId;
       setPhase('analyzing');
 
-      const nameSource = mode === 'github' ? githubUrl.trim() : localPath.trim();
+      const nameSource =
+        mode === 'archive'
+          ? (archiveFile as File).name.replace(/\.(tar\.gz|tgz|tar|zip)$/i, '')
+          : mode === 'github'
+            ? githubUrl.trim()
+            : localPath.trim();
       const controller = streamAnalyzeProgress(
         jobId,
         (p) => setProgress(p),
@@ -369,6 +414,107 @@ export const RepoAnalyzer = ({ variant, onComplete, onCancel }: RepoAnalyzerProp
             <FolderOpen className="h-3.5 w-3.5" />
             Browse for folder
           </button>
+        </div>
+      )}
+
+      {/* Archive upload */}
+      {showInput && mode === 'archive' && (
+        <div className="space-y-2">
+          <label className="block text-xs font-medium tracking-wider text-text-secondary uppercase">
+            Code Archive
+          </label>
+          <input
+            ref={archiveInputRef}
+            type="file"
+            accept=".zip,.tar,.tar.gz,.tgz"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                setArchiveFile(file);
+                setValidationError(null);
+              }
+              e.target.value = '';
+            }}
+          />
+          {/* Drop zone / file selector */}
+          <div
+            className={`flex cursor-pointer flex-col items-center gap-3 rounded-xl border-2 border-dashed px-4 py-6 transition-all duration-200 ${
+              archiveFile
+                ? 'border-accent/50 bg-accent/5'
+                : 'border-border-default bg-void hover:border-accent/30 hover:bg-accent/5'
+            }`}
+            onClick={() => archiveInputRef.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const file = e.dataTransfer.files?.[0];
+              if (file) {
+                const name = file.name.toLowerCase();
+                if (
+                  name.endsWith('.zip') ||
+                  name.endsWith('.tar') ||
+                  name.endsWith('.tar.gz') ||
+                  name.endsWith('.tgz')
+                ) {
+                  setArchiveFile(file);
+                  setValidationError(null);
+                } else {
+                  setValidationError('Unsupported file type. Allowed: .zip, .tar, .tar.gz, .tgz');
+                }
+              }
+            }}
+          >
+            {archiveFile ? (
+              <>
+                <FileArchive className="h-8 w-8 text-accent" />
+                <div className="text-center">
+                  <p className="text-sm font-medium text-text-primary">{archiveFile.name}</p>
+                  <p className="mt-0.5 text-xs text-text-muted">
+                    {(archiveFile.size / (1024 * 1024)).toFixed(1)} MB
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setArchiveFile(null);
+                  }}
+                  className="text-xs text-text-muted transition-colors hover:text-text-secondary"
+                >
+                  Remove
+                </button>
+              </>
+            ) : (
+              <>
+                <Upload className="h-8 w-8 text-text-muted" />
+                <div className="text-center">
+                  <p className="text-sm text-text-secondary">
+                    Drop an archive here or <span className="text-accent">browse</span>
+                  </p>
+                  <p className="mt-1 text-xs text-text-muted">
+                    .zip, .tar, .tar.gz, .tgz — up to 500 MB
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+          {/* Upload progress bar */}
+          {phase === 'starting' && uploadPercent > 0 && (
+            <div className="space-y-1">
+              <div className="h-1.5 overflow-hidden rounded-full bg-elevated">
+                <div
+                  className="h-full rounded-full bg-accent transition-all duration-300"
+                  style={{ width: `${uploadPercent}%` }}
+                />
+              </div>
+              <p className="text-xs text-text-muted">Uploading... {uploadPercent}%</p>
+            </div>
+          )}
         </div>
       )}
 

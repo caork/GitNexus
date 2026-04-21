@@ -12,6 +12,8 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
+import os from 'os';
+import multer from 'multer';
 import { createRequire } from 'node:module';
 import { loadMeta, listRegisteredRepos, getStoragePath } from '../storage/repo-manager.js';
 import {
@@ -34,6 +36,13 @@ import { fork } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { JobManager } from './analyze-job.js';
 import { extractRepoName, getCloneDir, cloneOrPull } from './git-clone.js';
+import {
+  getArchiveExtension,
+  extractArchive,
+  findProjectRoot,
+  ALLOWED_EXTENSIONS,
+  MAX_FILE_SIZE,
+} from './archive-utils.js';
 
 const _require = createRequire(import.meta.url);
 const pkg = _require('../../package.json');
@@ -1139,6 +1148,83 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
         .json({ error: err.message || 'Failed to query cluster detail' });
     }
   });
+
+  // ─── Archive Upload API ─────────────────────────────────────────────────
+  // Accept archive files (zip, tar, tar.gz, tgz), extract to a temp directory,
+  // then trigger analysis on the extracted contents.
+
+  const UPLOAD_DIR = path.join(os.homedir(), '.gitnexus', 'uploads');
+  await fs.mkdir(UPLOAD_DIR, { recursive: true });
+
+  const uploadMiddleware = multer({
+    dest: path.join(UPLOAD_DIR, '.tmp'),
+    limits: { fileSize: MAX_FILE_SIZE },
+    fileFilter: (_req, file, cb) => {
+      const ext = getArchiveExtension(file.originalname);
+      if (ext) {
+        cb(null, true);
+      } else {
+        cb(new Error(`Unsupported file type. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`));
+      }
+    },
+  });
+
+  app.post('/api/upload', uploadMiddleware.single('archive'), async (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ error: 'No file uploaded. Use multipart field name "archive".' });
+      return;
+    }
+
+    const ext = getArchiveExtension(req.file.originalname);
+    if (!ext) {
+      await fs.unlink(req.file.path).catch(() => {});
+      res
+        .status(400)
+        .json({ error: `Unsupported file type. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}` });
+      return;
+    }
+
+    const baseName = req.file.originalname.replace(/\.(tar\.gz|tgz|tar|zip)$/i, '');
+    const timestamp = Date.now();
+    const extractDir = path.join(UPLOAD_DIR, `${baseName}-${timestamp}`);
+
+    try {
+      await extractArchive(req.file.path, extractDir, ext);
+      const projectRoot = await findProjectRoot(extractDir);
+      await fs.unlink(req.file.path).catch(() => {});
+      res.json({
+        path: projectRoot,
+        name: path.basename(projectRoot),
+        extractedTo: extractDir,
+      });
+    } catch (err: any) {
+      await fs.unlink(req.file.path).catch(() => {});
+      await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+      res.status(500).json({ error: `Extraction failed: ${err.message}` });
+    }
+  });
+
+  // Multer error handler (must be after the upload route)
+  app.use(
+    '/api/upload',
+    (err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          res
+            .status(413)
+            .json({ error: `File too large. Maximum size: ${MAX_FILE_SIZE / (1024 * 1024)} MB` });
+          return;
+        }
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      if (err) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      next();
+    },
+  );
 
   // ── Analyze API ──────────────────────────────────────────────────────
 
