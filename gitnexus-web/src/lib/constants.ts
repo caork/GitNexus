@@ -1,43 +1,43 @@
 import type { NodeLabel } from 'gitnexus-shared';
 
-// Node colors by type - slightly muted for less visual noise
+// Node colors by type - Celestial Bodies Space Theme
 export const NODE_COLORS: Record<NodeLabel, string> = {
-  Project: '#a855f7', // Purple - prominent
-  Package: '#8b5cf6', // Violet
-  Module: '#7c3aed', // Violet darker
-  Folder: '#6366f1', // Indigo
-  File: '#3b82f6', // Blue
-  Class: '#f59e0b', // Amber - stands out
-  Function: '#10b981', // Emerald
-  Method: '#14b8a6', // Teal
-  Variable: '#64748b', // Slate - muted (less important)
-  Interface: '#ec4899', // Pink
-  Enum: '#f97316', // Orange
-  Decorator: '#eab308', // Yellow
-  Import: '#475569', // Slate darker - very muted
-  Type: '#a78bfa', // Violet light
-  CodeElement: '#64748b', // Slate - muted
-  Community: '#818cf8', // Indigo light - cluster indicator
-  Process: '#f43f5e', // Rose - execution flow indicator
-  Section: '#60a5fa', // Blue light - structural section
-  Struct: '#f59e0b', // Amber - like Class
-  Trait: '#ec4899', // Pink - like Interface
-  Impl: '#14b8a6', // Teal - like Method
-  TypeAlias: '#a78bfa', // Violet light - like Type
-  Const: '#64748b', // Slate - like Variable
-  Static: '#64748b', // Slate - like Variable
-  Namespace: '#7c3aed', // Violet - like Module
-  Union: '#f97316', // Orange - like Enum
-  Typedef: '#a78bfa', // Violet light - like Type
-  Macro: '#eab308', // Yellow - like Decorator
-  Property: '#64748b', // Slate - like Variable
-  Record: '#f59e0b', // Amber - like Class
-  Delegate: '#14b8a6', // Teal - like Method
-  Annotation: '#eab308', // Yellow - like Decorator
-  Constructor: '#10b981', // Emerald - like Function
-  Template: '#a78bfa', // Violet light - like Type
-  Route: '#f43f5e', // Rose - like Process
-  Tool: '#a855f7', // Purple - like Project
+  Project: '#D022FA', // Nebula Purple
+  Package: '#00E1FF', // Blue Supergiant (Cyan)
+  Module: '#00E1FF', // Blue Supergiant (Cyan)
+  Folder: '#00E1FF', // Blue Supergiant (Cyan)
+  File: '#6BB8E3', // Gas Giant (Ice Blue)
+  Class: '#FDB813', // Sun / Main Sequence Star (Gold)
+  Function: '#FF5E4D', // Red Dwarf / Solar Flare (Red)
+  Method: '#FF5E4D', // Red Dwarf / Solar Flare (Red)
+  Variable: '#9B9B9B', // Asteroid (Gray)
+  Interface: '#FDB813', // Sun / Main Sequence Star (Gold)
+  Enum: '#A6B0D5', // White Dwarf (Pale Blue)
+  Decorator: '#A6B0D5', // White Dwarf (Pale Blue)
+  Import: '#555566', // Deep Space Rock (Dark Gray)
+  Type: '#FDB813', // Sun / Main Sequence Star (Gold)
+  CodeElement: '#9B9B9B', // Asteroid (Gray)
+  Community: '#D022FA', // Nebula Purple
+  Process: '#D022FA', // Nebula Purple
+  Section: '#00E1FF', // Blue Supergiant (Cyan)
+  Struct: '#FDB813', // Sun / Main Sequence Star (Gold)
+  Trait: '#FDB813', // Sun / Main Sequence Star (Gold)
+  Impl: '#FF5E4D', // Red Dwarf / Solar Flare (Red)
+  TypeAlias: '#FDB813', // Sun / Main Sequence Star (Gold)
+  Const: '#9B9B9B', // Asteroid (Gray)
+  Static: '#9B9B9B', // Asteroid (Gray)
+  Namespace: '#00E1FF', // Blue Supergiant (Cyan)
+  Union: '#FDB813', // Sun / Main Sequence Star (Gold)
+  Typedef: '#FDB813', // Sun / Main Sequence Star (Gold)
+  Macro: '#FF5E4D', // Red Dwarf / Solar Flare (Red)
+  Property: '#9B9B9B', // Asteroid (Gray)
+  Record: '#FDB813', // Sun / Main Sequence Star (Gold)
+  Delegate: '#FF5E4D', // Red Dwarf / Solar Flare (Red)
+  Annotation: '#A6B0D5', // White Dwarf (Pale Blue)
+  Constructor: '#FF5E4D', // Red Dwarf / Solar Flare (Red)
+  Template: '#FDB813', // Sun / Main Sequence Star (Gold)
+  Route: '#D022FA', // Nebula Purple
+  Tool: '#D022FA', // Nebula Purple
 };
 
 // Node sizes by type - clear visual hierarchy with dramatic size differences
@@ -82,14 +82,13 @@ export const NODE_SIZES: Record<NodeLabel, number> = {
 };
 
 // ─── Ontology Interface Color Palette ────────────────────────────────────
-// Each Ontology Interface gets a distinct hue family so all implementing
-// Object Types share a visual identity in the graph.
+// Astronomical Theme: Unified identity via space metaphors
 export const INTERFACE_COLORS: Record<string, string> = {
-  Callable: '#10b981', // Emerald — functions, methods, constructors, macros
-  TypeDefinition: '#f59e0b', // Amber — classes, interfaces, structs, enums, traits
-  FileSystemEntry: '#3b82f6', // Blue — files, folders
-  ArchitecturalUnit: '#818cf8', // Indigo — communities, processes
-  CodeEntity: '#64748b', // Slate — generic code elements (fallback)
+  Callable: '#FF5E4D', // Red Dwarf / Flare Red — functions, methods, constructors, macros
+  TypeDefinition: '#FDB813', // Sun Gold — classes, interfaces, structs, enums, traits
+  FileSystemEntry: '#6BB8E3', // Gas Giant Ice Blue — files, folders
+  ArchitecturalUnit: '#00E1FF', // Blue Supergiant Cyan — communities, processes
+  CodeEntity: '#A6B0D5', // White Dwarf Pale Blue — generic code elements (fallback)
 };
 
 // Community color palette for cluster-based coloring
