@@ -1,7 +1,7 @@
-<!-- version: 1.4.0 -->
-<!-- Last updated: 2026-04-16 -->
+<!-- version: 1.6.0 -->
+<!-- Last updated: 2026-04-20 -->
 
-Last reviewed: 2026-04-16
+Last reviewed: 2026-04-20
 
 **Project:** GitNexus · **Environment:** dev · **Maintainer:** repository maintainers (see GitHub)
 
@@ -39,7 +39,8 @@ Commands and gotchas live under **Repo reference** below and in **[CONTRIBUTING.
 ## Reference docs
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)**, **[CONTRIBUTING.md](CONTRIBUTING.md)**, **[GUARDRAILS.md](GUARDRAILS.md)**
-- **Call-resolution DAG:** See ARCHITECTURE.md § Call-Resolution DAG. Typed 6-stage DAG inside the `parse` phase; language-specific behavior behind `inferImplicitReceiver` / `selectDispatch` hooks on `LanguageProvider`. Shared code in `gitnexus/src/core/ingestion/` must not name languages. Types: `gitnexus/src/core/ingestion/call-types.ts`.
+- **Call-resolution DAG (legacy path):** See ARCHITECTURE.md § Call-Resolution DAG. Typed 6-stage DAG inside the `parse` phase; language-specific behavior behind `inferImplicitReceiver` / `selectDispatch` hooks on `LanguageProvider`. Shared code in `gitnexus/src/core/ingestion/` must not name languages. Types: `gitnexus/src/core/ingestion/call-types.ts`.
+- **Scope-resolution pipeline (RFC #909 Ring 3):** See ARCHITECTURE.md § Scope-Resolution Pipeline. Replaces the legacy DAG for languages in `MIGRATED_LANGUAGES` (currently Python). A language plugs in by implementing `ScopeResolver` (`scope-resolution/contract/scope-resolver.ts`) and registering it in `SCOPE_RESOLVERS`. CI parity gate runs BOTH paths per migrated language on every PR.
 - **Cursor:** `.cursor/index.mdc` (always-on); `.cursor/rules/*.mdc` (glob-scoped). Legacy `.cursorrules` deprecated.
 - **GitNexus:** skills in `.claude/skills/gitnexus/`; MCP rules in `gitnexus:start` block below.
 
@@ -47,6 +48,7 @@ Commands and gotchas live under **Repo reference** below and in **[CONTRIBUTING.
 
 | Date | Version | Change |
 |------|---------|--------|
+| 2026-04-20 | 1.6.0 | Added scope-resolution pipeline pointer (RFC #909 Ring 3); Python migrated to registry-primary. |
 | 2026-04-19 | 1.5.0 | Cross-repo impact (#794): `impact`/`query`/`context` accept `repo: "@<group>"` + `service`. Removed `group_query`/`group_contracts`/`group_status` MCP tools; added `gitnexus://group/{name}/contracts` and `gitnexus://group/{name}/status` resources. |
 | 2026-04-16 | 1.4.0 | Fixed: web UI description, pre-commit behavior, MCP tools (7->16), added gitnexus-shared, removed stale vite-plugin-wasm gotcha. |
 | 2026-04-13 | 1.3.0 | Updated GitNexus index stats after DAG refactor. |
@@ -77,6 +79,40 @@ This project is indexed by GitNexus as **GitNexus** (17923 symbols, 25121 relati
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
 - NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
 - NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
+- NEVER add language-specific behavior to shared ingestion code (`gitnexus/src/core/ingestion/`) — use a `LanguageProvider` hook. Seeing `provider.mroStrategy === 'xxx'` or an import from `languages/xxx.ts` in shared code means stop and add a hook.
+
+## Tools Quick Reference
+
+| Tool | When to use | Example |
+|------|-------------|---------|
+| `list_repos` | Discover indexed repos | `gitnexus_list_repos({})` |
+| `query` | Find code by concept | `gitnexus_query({query: "auth validation"})` |
+| `context` | 360-degree view of one symbol | `gitnexus_context({name: "validateUser"})` |
+| `impact` | Blast radius before editing | `gitnexus_impact({target: "X", direction: "upstream"})` |
+| `detect_changes` | Pre-commit scope check | `gitnexus_detect_changes({scope: "staged"})` |
+| `rename` | Safe multi-file rename | `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` |
+| `cypher` | Custom graph queries | `gitnexus_cypher({query: "MATCH ..."})` |
+| `api_impact` | Pre-change API route impact | `gitnexus_api_impact({route: "/api/users", method: "GET"})` |
+| `route_map` | Route → handler → consumer map | `gitnexus_route_map({})` |
+| `tool_map` | MCP/RPC tool definitions | `gitnexus_tool_map({})` |
+| `shape_check` | Response shape vs consumer access | `gitnexus_shape_check({route: "/api/users"})` |
+| `group_list` | List repo groups | `gitnexus_group_list({})` |
+| `group_sync` | Rebuild group Contract Registry | `gitnexus_group_sync({name: "myGroup"})` |
+| `query` (group mode) | Cross-repo search in a group (RRF-merged) | `gitnexus_query({repo: "@myGroup", query: "auth"})` |
+| `context` (group mode) | 360° view across all member repos | `gitnexus_context({repo: "@myGroup", name: "validateUser"})` |
+| `impact` (group mode) | Cross-repo blast radius via Contract Bridge | `gitnexus_impact({repo: "@myGroup", target: "X", direction: "upstream"})` |
+
+> Group mode: pass `repo: "@<groupName>"` to fan out across all member repos, or `repo: "@<groupName>/<memberPath>"` to target a single member (path keys from `group.yaml`). Optional `service: "<monorepo/path>"` filters by service root. Group-level state (contracts, staleness) lives in the resources table below — there are **no** `group_query` / `group_context` / `group_impact` / `group_contracts` / `group_status` MCP tools.
+>
+> For a full walkthrough of setting up a group across multiple repos that communicate over gRPC, see [docs/guides/microservices-grpc.md](docs/guides/microservices-grpc.md).
+
+## Impact Risk Levels
+
+| Depth | Meaning | Action |
+|-------|---------|--------|
+| d=1 | WILL BREAK — direct callers/importers | MUST update |
+| d=2 | LIKELY AFFECTED — indirect deps | Should test |
+| d=3 | MAY NEED TESTING — transitive | Test if critical path |
 
 ## Resources
 
