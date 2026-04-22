@@ -304,21 +304,13 @@ export const knowledgeGraphToGraphology = (
   // Edge styles - each relationship type has a DISTINCT color for clarity
   // Using varied hues so relationships are easily distinguishable
   const EDGE_STYLES: Record<string, { color: string; sizeMultiplier: number }> = {
-    // STRUCTURAL - Greens (folder/file hierarchy)
-    CONTAINS: { color: '#2d5a3d', sizeMultiplier: 0.4 }, // Forest green - folder contains
-
-    // DEFINITIONS - Cyan/Teal (code definitions)
-    DEFINES: { color: '#0e7490', sizeMultiplier: 0.5 }, // Cyan - file defines function/class
-
-    // DEPENDENCIES - Blue (imports between files)
-    IMPORTS: { color: '#1d4ed8', sizeMultiplier: 0.6 }, // Blue - file imports file
-
-    // FUNCTION FLOW - Purple (call graph)
-    CALLS: { color: '#7c3aed', sizeMultiplier: 0.8 }, // Violet - function calls
-
-    // TYPE RELATIONSHIPS - Warm colors (OOP)
-    EXTENDS: { color: '#c2410c', sizeMultiplier: 1.0 }, // Orange - extension
-    IMPLEMENTS: { color: '#be185d', sizeMultiplier: 0.9 }, // Pink - interface implementation
+    // 统一改为灰色降低视觉杂乱
+    CONTAINS: { color: '#282836', sizeMultiplier: 0.3 }, 
+    DEFINES: { color: '#282836', sizeMultiplier: 0.35 }, 
+    IMPORTS: { color: '#30303e', sizeMultiplier: 0.4 }, 
+    CALLS: { color: '#3a3a4a', sizeMultiplier: 0.5 }, 
+    EXTENDS: { color: '#404050', sizeMultiplier: 0.6 }, 
+    IMPLEMENTS: { color: '#404050', sizeMultiplier: 0.55 }, 
   };
 
   knowledgeGraph.relationships.forEach((rel) => {
