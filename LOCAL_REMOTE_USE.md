@@ -27,11 +27,11 @@ claude mcp add gitnexus -- ssh <你的用户名>@192.168.1.100 "cd /远程代码
 系统支持原生的 Server-Sent Events (SSE) 协议进行穿透。请在本地新建一个名为 `proxy.mjs` （注意使用 .mjs 后缀以支持 ES6 Import）的文件，填入以下透传代码：
 
 ```javascript
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import readline from "node:readline";
 
 // 替换为您服务器的真实内网地址和端口
-const transport = new SSEClientTransport(new URL("http://192.168.1.100:4747/api/mcp"));
+const transport = new StreamableHTTPClientTransport(new URL("http://192.168.1.100:4747/api/mcp"));
 
 async function start() {
   await transport.start();
