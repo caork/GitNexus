@@ -99,6 +99,9 @@ gitnexus/vendor/**/node_modules/
 
 .history/
 
+# Offline docker image bundles produced by release packaging
+gitnexus-images-*.tar.gz
+
 .swarm/
 
 local_docs/

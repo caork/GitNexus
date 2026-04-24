@@ -18,7 +18,43 @@ GitNexus 是团队定制的代码知识图谱引擎，让大模型（如 Claude 
 
 确保服务器已安装 Docker 和 Docker Compose，无需其他依赖。
 
-#### 方式 B：离线 Bundle + pm2（无外网镜像源时使用）
+#### 方式 B：离线 Docker 镜像 tar（无外网镜像源，但目标机装了 Docker）
+
+最省心的离线方式：维护者在同架构外网机器上 `docker build` + `docker save`，产出的 tar 直接 `docker load` 即可。原生模块（tree-sitter / onnxruntime-node）已在构建时编译进镜像，无需目标机装 Node / Python / 编译链。
+
+**外网机器构建并打包：**
+
+```bash
+git clone https://github.com/caork/GitNexus.git
+cd GitNexus
+docker build -f Dockerfile.cli -t gitnexus:offline .
+docker build -f Dockerfile.web -t gitnexus-web:offline .
+
+# 打包为单个 tar（约 600 MB - 1 GB）
+docker save gitnexus:offline gitnexus-web:offline \
+  | gzip > gitnexus-images-$(uname -m).tar.gz
+```
+
+> ⚠️ **必须架构一致**：`arm64` 机器构建的镜像**不能**在 `x86_64` 机器运行（反之亦然）。一般内网服务器是 `x86_64`，构建时请在 x86_64 外网机或用 `docker buildx build --platform linux/amd64` 交叉编译。
+
+将 `gitnexus-images-*.tar.gz` 传输到内网服务器（团队也可直接从 [caork/GitNexus Releases](https://github.com/caork/GitNexus/releases) 下载对应架构的预构建 tar）。
+
+**内网服务器加载并启动：**
+
+```bash
+gunzip -c gitnexus-images-$(uname -m).tar.gz | docker load
+
+SERVER_IMAGE=gitnexus:offline \
+WEB_IMAGE=gitnexus-web:offline \
+WORKSPACE_DIR=$HOME/code \
+  docker compose up -d
+```
+
+`docker-compose.yaml` 已预留 `SERVER_IMAGE` / `WEB_IMAGE` 环境变量覆盖入口，无需修改文件。
+
+---
+
+#### 方式 C：离线 Bundle + pm2（无外网镜像源，目标机未装 Docker）
 
 `tree-sitter` 和 `onnxruntime-node` 是原生二进制模块，**必须在与内网服务器相同 OS 和 CPU 架构的外网机器上打包**。
 
@@ -57,7 +93,9 @@ WORKSPACE_DIR=$HOME/code docker compose up -d
 
 两个服务均已配置自动重启。
 
-#### 方式 B：离线 Bundle 部署
+方式 B（离线镜像 tar）的部署命令已在上节给出。
+
+#### 方式 C：离线 Bundle 部署
 
 ```bash
 mkdir -p ~/gitnexus-server
@@ -77,13 +115,13 @@ pm2 startup           # 生成开机自启命令（按提示执行一次）
 
 服务启动后，需要对目标代码仓库执行一次全量扫描建库。
 
-**方式 A（Docker 环境）**：
+**方式 A / B（Docker 环境）**：
 
 ```bash
 docker compose exec gitnexus-server gitnexus analyze /workspace/你的目标代码仓库名
 ```
 
-**方式 B（原生环境）**：
+**方式 C（原生环境）**：
 
 ```bash
 gitnexus analyze ~/code/你的目标代码仓库名
