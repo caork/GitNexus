@@ -10,6 +10,11 @@ Last reviewed: 2026-04-13
 
 Follow **AGENTS.md** for the canonical rules; this file adds Claude Code–specific deltas. Cursor-specific notes live only in `AGENTS.md`.
 
+## Browser automation policy
+
+- **Never use the Chrome extension** (`mcp__Claude_in_Chrome__*`) for browser viewing/interaction.
+- **Use Preview tools** (`mcp__Claude_Preview__*`) or **computer-use** (`mcp__computer-use__*`) instead.
+
 ## Fork development policy
 
 This checkout is a **fork** of `abhigyanpatwari/GitNexus` (upstream = `origin`, our fork = `fork` → `caork/GitNexus`).
