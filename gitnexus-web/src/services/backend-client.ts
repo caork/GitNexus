@@ -190,7 +190,7 @@ export function streamSSE<T = unknown>(url: string, handlers: SSEHandlers<T>): A
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
-let _backendUrl = 'http://localhost:4747';
+let _backendUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4747';
 
 export const setBackendUrl = (url: string): void => {
   _backendUrl = url.replace(/\/$/, '');
@@ -223,7 +223,7 @@ export function normalizeServerUrl(input: string): string {
 // ── Internal Helpers ───────────────────────────────────────────────────────
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const PROBE_TIMEOUT_MS = 2_000;
+const PROBE_TIMEOUT_MS = 10_000;
 
 const fetchWithTimeout = async (
   url: string,

@@ -2,7 +2,7 @@
  * RepoAnalyzer
  *
  * Three input modes:
- *   - "github"  → GitHub URL (https://github.com/owner/repo)
+ *   - "github"  → Git repository URL (https://host/owner/repo)
  *   - "local"   → Select a local folder via the browser's native directory picker
  *   - "archive" → Upload a code archive (.zip, .tar, .tar.gz, .tgz)
  */
@@ -32,11 +32,11 @@ import { AnalyzeProgress } from './AnalyzeProgress';
 
 type InputMode = 'github' | 'local' | 'archive';
 
-const GITHUB_RE = /^https?:\/\/(www\.)?github\.com\/[^/\s]+\/[^/\s]+/i;
+const GIT_URL_RE = /^https?:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+/i;
 const IS_WINDOWS = navigator.userAgent.toLowerCase().includes('win');
 
 function isValidGithubUrl(value: string): boolean {
-  return GITHUB_RE.test(value.trim());
+  return GIT_URL_RE.test(value.trim());
 }
 
 // ── Mode tabs ────────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ function ModeTabs({ mode, onChange }: { mode: InputMode; onChange: (m: InputMode
         } `}
       >
         <Github className="h-3 w-3" />
-        GitHub URL
+        Git URL
       </button>
       <button
         role="tab"
@@ -203,7 +203,9 @@ export const RepoAnalyzer = ({ variant, onComplete, onCancel }: RepoAnalyzerProp
 
   const handleAnalyze = async () => {
     if (mode === 'github' && !isValidGithubUrl(githubUrl)) {
-      setValidationError('Please enter a valid GitHub repository URL.');
+      setValidationError(
+        'Please enter a valid repository URL (e.g. https://github.com/owner/repo).',
+      );
       return;
     }
     if (mode === 'local' && localPath.trim().length < 2) {
@@ -290,14 +292,14 @@ export const RepoAnalyzer = ({ variant, onComplete, onCancel }: RepoAnalyzerProp
       {/* Mode tabs */}
       {showInput && <ModeTabs mode={mode} onChange={handleModeChange} />}
 
-      {/* GitHub URL input */}
+      {/* Git URL input */}
       {showInput && mode === 'github' && (
         <div className="space-y-2">
           <label
             htmlFor={inputId}
             className="block text-xs font-medium tracking-wider text-text-secondary uppercase"
           >
-            GitHub Repository URL
+            Repository URL
           </label>
           <div
             className={`flex items-center gap-3 rounded-xl border bg-void px-4 py-3.5 transition-all duration-200 ${
@@ -324,7 +326,7 @@ export const RepoAnalyzer = ({ variant, onComplete, onCancel }: RepoAnalyzerProp
                 }
               }}
               disabled={isLoading}
-              placeholder="https://github.com/owner/repo"
+              placeholder="https://github.com/owner/repo  or any Git host"
               autoComplete="url"
               spellCheck={false}
               className="flex-1 border-none bg-transparent font-mono text-sm text-text-primary outline-none placeholder:text-text-muted disabled:opacity-50"
