@@ -31,14 +31,21 @@ RUN npm prune --omit=dev --prefix gitnexus
 # ── Runtime ────────────────────────────────────────────────────────────
 FROM node:22-trixie-slim AS runtime
 
-# curl for the healthcheck; git so `gitnexus` can clone repos at runtime.
-RUN apt-get update && apt-get install -y --no-install-recommends curl git && rm -rf /var/lib/apt/lists/*
+# curl for the healthcheck; git so `gitnexus` can clone repos at runtime;
+# ca-certificates so HTTPS clones from non-GitHub hosts (gitcode.com,
+# self-hosted GitLab, etc.) succeed without "SSL handshake failed".
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Pre-create the data directory and hand it to the unprivileged `node` user
-# so the bind-mounted volume is writable without root.
-RUN mkdir -p /data/gitnexus && chown -R node:node /data
+# Pre-create the persistence directory and hand it to the unprivileged
+# `node` user so a bind-mounted or named volume is writable without root.
+# Path matches `GITNEXUS_HOME` below so registry.json, repos/, uploads/,
+# and groups/ all land under a single mount point.
+RUN mkdir -p /home/node/.gitnexus && chown -R node:node /home/node/.gitnexus
 
 COPY --from=builder --chown=node:node /app/gitnexus/dist ./gitnexus/dist
 COPY --from=builder --chown=node:node /app/gitnexus/node_modules ./gitnexus/node_modules
@@ -48,11 +55,25 @@ COPY --from=builder --chown=node:node /app/gitnexus/vendor ./gitnexus/vendor
 USER node
 
 # The web UI defaults to http://localhost:4747 — keep that contract.
-ENV GITNEXUS_HOME=/data/gitnexus \
+# GITNEXUS_HOME unifies registry.json, repos/, uploads/, and groups/ under
+# a single mount point so operators only need one `-v` flag to persist all
+# index state.
+ENV GITNEXUS_HOME=/home/node/.gitnexus \
     NODE_ENV=production \
     PORT=4747
 
+# Declare the persistence boundary. Operators who forget `-v` still get an
+# anonymous volume rather than silently losing data into the container's
+# writable layer.
+VOLUME ["/home/node/.gitnexus"]
+
 EXPOSE 4747
+
+# Liveness probe — `/api/heartbeat` is exempt from auth and returns 200 OK
+# once the server is accepting connections. `start-period=30s` accounts for
+# initial LadybugDB warm-up when restoring a large persisted index.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:4747/api/heartbeat || exit 1
 
 # Bind to 0.0.0.0 so the server is reachable from the host's mapped port.
 CMD ["node", "gitnexus/dist/cli/index.js", "serve", "--host", "0.0.0.0", "--port", "4747"]

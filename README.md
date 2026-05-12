@@ -379,8 +379,10 @@ This starts the server on `http://localhost:4747` and the web UI on
 `http://localhost:4173`. The UI auto-detects the server because the browser
 runs on the host and reaches the container via the mapped port.
 
-A named volume (`gitnexus-data`) persists the global registry, indexes, and
-cloned repos at `/data/gitnexus` inside the server container. To make repos on
+A named volume (`gitnexus-data`) persists the global registry, indexes, cloned
+repos, and uploads at `/home/node/.gitnexus` inside the server container (this
+is the path `GITNEXUS_HOME` resolves to in the published image — overrideable
+via `-e GITNEXUS_HOME=...` for non-standard deployments). To make repos on
 your host machine indexable, set `WORKSPACE_DIR` before bringing the stack up:
 
 ```bash
@@ -396,7 +398,7 @@ docker compose exec gitnexus-server gitnexus index /workspace/my-repo
 docker run --rm -d \
   --name gitnexus-server \
   -p 4747:4747 \
-  -v gitnexus-data:/data/gitnexus \
+  -v gitnexus-data:/home/node/.gitnexus \
   ghcr.io/abhigyanpatwari/gitnexus:latest
 
 # Web UI

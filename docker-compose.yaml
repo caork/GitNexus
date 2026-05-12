@@ -8,8 +8,10 @@ services:
     ports:
       - '${SERVER_HOST_PORT:-4747}:4747'
     volumes:
-      # Persist the global registry, indexes, and cloned repos across runs.
-      - gitnexus-data:/data/gitnexus
+      # Persist the global registry, indexes, cloned repos, and uploads
+      # across runs. Mount point matches GITNEXUS_HOME in the image (see
+      # Dockerfile.cli) so a single volume captures all index state.
+      - gitnexus-data:/home/node/.gitnexus
       # Optional: mount a host workspace so `gitnexus index <path>` can see
       # repos you already have on disk. The default points at an empty
       # `./workspace/` sibling that compose will create on first start —
