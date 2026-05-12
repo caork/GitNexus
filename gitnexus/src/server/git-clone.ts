@@ -1,15 +1,16 @@
 /**
  * Git Clone Utility
  *
- * Shallow-clones repositories into ~/.gitnexus/repos/{name}/.
+ * Shallow-clones repositories into <GITNEXUS_HOME>/repos/{name}/
+ * (defaults to ~/.gitnexus/repos/{name}/).
  * If already cloned, does git pull instead.
  */
 
 import { spawn } from 'child_process';
 import path from 'path';
-import os from 'os';
 import fs from 'fs/promises';
 import { isIP } from 'net';
+import { getGlobalDir } from '../storage/repo-manager.js';
 
 /** Extract the repository name from a git URL (HTTPS or SSH). */
 export function extractRepoName(url: string): string {
@@ -20,7 +21,7 @@ export function extractRepoName(url: string): string {
 
 /** Get the clone target directory for a repo name. */
 export function getCloneDir(repoName: string): string {
-  return path.join(os.homedir(), '.gitnexus', 'repos', repoName);
+  return path.join(getGlobalDir(), 'repos', repoName);
 }
 
 // Cloud metadata hostnames that must never be reachable via user-supplied URLs

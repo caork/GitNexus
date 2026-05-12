@@ -1,15 +1,16 @@
 /**
  * Server Mapping Configuration
  *
- * Reads ~/.gitnexus/server-mapping.json to map repo names to service names.
- * Used in embedding text to enrich metadata with microservice context.
+ * Reads <GITNEXUS_HOME>/server-mapping.json (defaults to ~/.gitnexus/...)
+ * to map repo names to service names. Used in embedding text to enrich
+ * metadata with microservice context.
  */
 
 import fs from 'fs/promises';
 import path from 'path';
-import os from 'os';
+import { getGlobalDir } from '../../storage/repo-manager.js';
 
-const MAPPING_FILE = path.join(os.homedir(), '.gitnexus', 'server-mapping.json');
+const getMappingFilePath = (): string => path.join(getGlobalDir(), 'server-mapping.json');
 
 let cachedMapping: Record<string, string> | null = null;
 
@@ -20,7 +21,7 @@ let cachedMapping: Record<string, string> | null = null;
 export const readServerMapping = async (repoName: string): Promise<string | undefined> => {
   try {
     if (!cachedMapping) {
-      const raw = await fs.readFile(MAPPING_FILE, 'utf-8');
+      const raw = await fs.readFile(getMappingFilePath(), 'utf-8');
       cachedMapping = JSON.parse(raw);
     }
     return cachedMapping[repoName];

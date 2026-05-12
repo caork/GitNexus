@@ -1,13 +1,18 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import type { ContractRegistry } from './types.js';
+import { getGlobalDir } from '../../storage/repo-manager.js';
 
 const CONTRACTS_FILE = 'contracts.json';
 
+/**
+ * Returns the default GitNexus data directory. Delegates to the single
+ * canonical implementation in `storage/repo-manager.ts` so that all
+ * subsystems agree on the path (registry, repos, uploads, groups, etc.).
+ */
 export function getDefaultGitnexusDir(): string {
-  return process.env.GITNEXUS_HOME || path.join(os.homedir(), '.gitnexus');
+  return getGlobalDir();
 }
 
 export function getGroupsBaseDir(gitnexusDir?: string): string {

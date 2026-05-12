@@ -12,10 +12,14 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
-import os from 'os';
 import multer from 'multer';
 import { createRequire } from 'node:module';
-import { loadMeta, listRegisteredRepos, getStoragePath } from '../storage/repo-manager.js';
+import {
+  loadMeta,
+  listRegisteredRepos,
+  getStoragePath,
+  getGlobalDir,
+} from '../storage/repo-manager.js';
 import {
   executeQuery,
   executePrepared,
@@ -1153,7 +1157,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
   // Accept archive files (zip, tar, tar.gz, tgz), extract to a temp directory,
   // then trigger analysis on the extracted contents.
 
-  const UPLOAD_DIR = path.join(os.homedir(), '.gitnexus', 'uploads');
+  const UPLOAD_DIR = path.join(getGlobalDir(), 'uploads');
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
 
   const uploadMiddleware = multer({

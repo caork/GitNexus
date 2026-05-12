@@ -25,11 +25,26 @@ describe('git-clone', () => {
   });
 
   describe('getCloneDir', () => {
-    it('returns path under ~/.gitnexus/repos/', () => {
+    it('returns path under <GITNEXUS_HOME>/repos/ (defaults to ~/.gitnexus/repos/)', () => {
       const dir = getCloneDir('my-repo');
       expect(dir).toContain('.gitnexus');
       expect(dir).toMatch(/repos/);
       expect(dir).toContain('my-repo');
+    });
+
+    it('honors GITNEXUS_HOME override', () => {
+      const previous = process.env.GITNEXUS_HOME;
+      process.env.GITNEXUS_HOME = '/tmp/gnx-test-home';
+      try {
+        const dir = getCloneDir('my-repo');
+        expect(dir).toBe('/tmp/gnx-test-home/repos/my-repo');
+      } finally {
+        if (previous === undefined) {
+          delete process.env.GITNEXUS_HOME;
+        } else {
+          process.env.GITNEXUS_HOME = previous;
+        }
+      }
     });
   });
 
