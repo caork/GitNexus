@@ -4,12 +4,22 @@
  * Starts the MCP server in standalone mode.
  * Loads all indexed repos from the global registry.
  * No longer depends on cwd — works from any directory.
+ *
+ * With --remote <url>, runs as a thin proxy that forwards all MCP
+ * requests to a remote GitNexus HTTP service via StreamableHTTP.
  */
 
 import { startMCPServer } from '../mcp/server.js';
 import { LocalBackend } from '../mcp/local/local-backend.js';
 
-export const mcpCommand = async () => {
+export const mcpCommand = async (options?: { remote?: string }) => {
+  // --remote mode: proxy to a remote GitNexus service
+  if (options?.remote) {
+    const { startRemoteProxy } = await import('../mcp/remote-proxy.js');
+    await startRemoteProxy(options.remote);
+    return;
+  }
+
   // Prevent unhandled errors from crashing the MCP server process.
   // LadybugDB lock conflicts and transient errors should degrade gracefully.
   process.on('uncaughtException', (err) => {

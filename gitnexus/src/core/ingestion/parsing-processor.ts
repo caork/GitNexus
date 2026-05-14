@@ -10,6 +10,7 @@ import type { SymbolTableReader, SymbolTableWriter, ExtractedHeritage } from './
 import { ASTCache } from './ast-cache.js';
 import { getLanguageFromFilename, SupportedLanguages } from 'gitnexus-shared';
 import { extractVueScript, isVueSetupTopLevel } from './vue-sfc-extractor.js';
+import { preprocessAscendC } from './ascend-c-preprocessor.js';
 import { yieldToEventLoop } from './utils/event-loop.js';
 import {
   getDefinitionNodeFromCaptures,
@@ -362,6 +363,12 @@ const processParsingSequential = async (
       parseContent = extracted.scriptContent;
       lineOffset = extracted.lineOffset;
       isVueSetup = extracted.isSetup;
+    }
+
+    // Ascend C (.asc) preprocessing: strip non-standard attributes so
+    // tree-sitter C++ can parse the file without errors.
+    if (file.path.endsWith('.asc')) {
+      parseContent = preprocessAscendC(parseContent);
     }
 
     try {
