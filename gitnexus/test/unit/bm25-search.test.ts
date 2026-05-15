@@ -27,24 +27,25 @@ vi.mock('../../src/core/lbug/pool-adapter.js', () => ({
       if (idx !== -1) poolCloseListeners.splice(idx, 1);
     };
   },
+  isFtsLoaded: () => true,
 }));
 
 describe('BM25 search', () => {
   describe('searchFTSFromLbug', () => {
     it('returns empty array when LadybugDB is not initialized', async () => {
       // Without LadybugDB init, search should return empty (not crash)
-      const results = await searchFTSFromLbug('test query');
+      const { results } = await searchFTSFromLbug('test query');
       expect(Array.isArray(results)).toBe(true);
       expect(results).toHaveLength(0);
     });
 
     it('handles empty query', async () => {
-      const results = await searchFTSFromLbug('');
+      const { results } = await searchFTSFromLbug('');
       expect(Array.isArray(results)).toBe(true);
     });
 
     it('accepts custom limit parameter', async () => {
-      const results = await searchFTSFromLbug('test', 5);
+      const { results } = await searchFTSFromLbug('test', 5);
       expect(Array.isArray(results)).toBe(true);
     });
   });
@@ -94,7 +95,7 @@ describe('BM25 search', () => {
         .mockResolvedValueOnce([]) // Method
         .mockResolvedValueOnce([]); // Interface
 
-      const results = await searchFTSFromLbug('queryset');
+      const { results } = await searchFTSFromLbug('queryset');
 
       expect(results).toHaveLength(1);
       expect(results[0].filePath).toBe('src/views.py');
@@ -116,7 +117,7 @@ describe('BM25 search', () => {
         .mockResolvedValueOnce([]) // Method
         .mockResolvedValueOnce([]); // Interface
 
-      const results = await searchFTSFromLbug('model');
+      const { results } = await searchFTSFromLbug('model');
 
       expect(results).toHaveLength(1);
       expect(results[0].score).toBe(8); // 5+3
@@ -136,7 +137,7 @@ describe('BM25 search', () => {
         .mockResolvedValueOnce([]) // Method
         .mockResolvedValueOnce([]); // Interface
 
-      const results = await searchFTSFromLbug('util');
+      const { results } = await searchFTSFromLbug('util');
 
       expect(results).toHaveLength(1);
       expect(results[0].nodeIds).toEqual([]);
@@ -160,7 +161,7 @@ describe('BM25 search', () => {
         .mockResolvedValueOnce([]) // Method
         .mockResolvedValueOnce([]); // Interface
 
-      const results = await searchFTSFromLbug('auth');
+      const { results } = await searchFTSFromLbug('auth');
 
       expect(results).toHaveLength(1);
       // All 3 hits (scores 9+7+4=20) — each from a different table, all top-3
@@ -181,7 +182,7 @@ describe('BM25 search', () => {
         .mockResolvedValueOnce([]) // Method
         .mockResolvedValueOnce([]); // Interface
 
-      const results = await searchFTSFromLbug('fn');
+      const { results } = await searchFTSFromLbug('fn');
 
       expect(results[0].filePath).toBe('src/high.py');
       expect(results[1].filePath).toBe('src/low.py');
@@ -211,7 +212,7 @@ describe('BM25 search', () => {
       });
 
       const r1 = await searchFTSFromLbug('anything', 5, REPO);
-      expect(Array.isArray(r1)).toBe(true);
+      expect(Array.isArray(r1.results)).toBe(true);
 
       const createCallsAfterFirst = mockExecuteQuery.mock.calls.filter((c) =>
         String(c[1]).includes('CREATE_FTS_INDEX'),

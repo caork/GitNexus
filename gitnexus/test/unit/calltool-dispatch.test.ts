@@ -50,7 +50,7 @@ vi.mock('../../src/core/git-staleness.js', () => ({
 
 // Also mock the search modules to avoid loading onnxruntime
 vi.mock('../../src/core/search/bm25-index.js', () => ({
-  searchFTSFromLbug: vi.fn().mockResolvedValue([]),
+  searchFTSFromLbug: vi.fn().mockResolvedValue({ results: [], ftsAvailable: true }),
 }));
 
 vi.mock('../../src/mcp/core/embedder.js', () => ({
