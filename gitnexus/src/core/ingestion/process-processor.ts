@@ -166,7 +166,12 @@ export const processProcesses = async (
     const terminalNode = nodeMap.get(terminalId);
     const entryName = entryNode?.properties.name || 'Unknown';
     const terminalName = terminalNode?.properties.name || 'Unknown';
-    const heuristicLabel = `${capitalize(entryName)} → ${capitalize(terminalName)}`;
+    const terminalUnresolved = terminalNode?.properties.unresolvedCalls as string | undefined;
+    let heuristicLabel = `${capitalize(entryName)} → ${capitalize(terminalName)}`;
+    if (terminalUnresolved) {
+      const apis = terminalUnresolved.split(',').slice(0, 3).join(', ');
+      heuristicLabel += ` [→ ${apis}]`;
+    }
 
     const processId = `proc_${idx}_${sanitizeId(entryName)}`;
 

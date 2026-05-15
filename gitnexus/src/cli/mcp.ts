@@ -20,17 +20,33 @@ export const mcpCommand = async (options?: { remote?: string }) => {
     return;
   }
 
-  // Prevent unhandled errors from crashing the MCP server process.
-  // LadybugDB lock conflicts and transient errors should degrade gracefully.
+  // --- early shutdown wiring (before any async work) ---
+  let shuttingDown = false;
+  const shutdown = (exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    process.exit(exitCode);
+  };
+
+  const safeStderrWrite = (msg: string) => {
+    if (shuttingDown) return;
+    try {
+      process.stderr.write(msg);
+    } catch {}
+  };
+
   process.on('uncaughtException', (err) => {
-    console.error(`GitNexus MCP: uncaught exception — ${err.message}`);
-    // Process is in an undefined state after uncaughtException — exit after flushing
-    setTimeout(() => process.exit(1), 100);
+    safeStderrWrite(`GitNexus MCP: uncaught exception — ${err.message}\n`);
+    shutdown(1);
   });
   process.on('unhandledRejection', (reason) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
-    console.error(`GitNexus MCP: unhandled rejection — ${msg}`);
+    safeStderrWrite(`GitNexus MCP: unhandled rejection — ${msg}\n`);
   });
+  process.stdin.on('end', () => shutdown());
+  process.stdin.on('error', () => shutdown());
+  process.stdout.on('error', () => shutdown());
+  process.stderr.on('error', () => shutdown());
 
   // Initialize multi-repo backend from registry.
   // The server starts even with 0 repos — tools call refreshRepos() lazily,

@@ -861,6 +861,8 @@ export const processCalls = async (
   // The accumulator (if present) is now fully populated from the preparation
   // loop above, so verifyConstructorBindings sees all provider bindings
   // regardless of file processing order.
+  const MAX_UNRESOLVED_PER_NODE = 20;
+  const unresolvedCallsMap = new Map<string, Set<string>>();
   for (let i = 0; i < prepared.length; i++) {
     const { file, language, provider, tree, matches, parentMap, typeEnv } = prepared[i];
 
@@ -1296,7 +1298,17 @@ export const processCalls = async (
         dispatchDecision,
       );
 
-      if (!resolved) return;
+      if (!resolved) {
+        if (sourceId && calledName) {
+          let set = unresolvedCallsMap.get(sourceId);
+          if (!set) {
+            set = new Set();
+            unresolvedCallsMap.set(sourceId, set);
+          }
+          if (set.size < MAX_UNRESOLVED_PER_NODE) set.add(calledName);
+        }
+        return;
+      }
       const relId = generateId('CALLS', `${sourceId}:${calledName}->${resolved.nodeId}`);
 
       graph.addRelationship({
@@ -1366,6 +1378,18 @@ export const processCalls = async (
     }
 
     ctx.clearCache();
+  }
+
+  // ── Flush unresolved calls to graph nodes ──
+  for (const [nodeId, callNames] of unresolvedCallsMap) {
+    const node = graph.getNode(nodeId);
+    if (node) {
+      const existing = node.properties.unresolvedCalls as string | undefined;
+      const merged = existing ? new Set([...existing.split(','), ...callNames]) : callNames;
+      node.properties.unresolvedCalls = Array.from(merged)
+        .slice(0, MAX_UNRESOLVED_PER_NODE)
+        .join(',');
+    }
   }
 
   // ── Resolve deferred write-access edges ──

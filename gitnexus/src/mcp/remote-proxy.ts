@@ -34,11 +34,50 @@ export async function startRemoteProxy(remoteUrl: string): Promise<void> {
   const require = createRequire(import.meta.url);
   const pkgVersion: string = require('../../package.json').version;
 
+  // --- graceful shutdown (registered early so stdio-close during connect is caught) ---
+  let upstream: Client | undefined; // eslint-disable-line prefer-const -- assigned after shutdown wiring
+  let server: Server | undefined; // eslint-disable-line prefer-const
+  let shuttingDown = false;
+  const shutdown = (exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const cleanup = async () => {
+      try {
+        await upstream?.close();
+      } catch {}
+      try {
+        await server?.close();
+      } catch {}
+      process.exit(exitCode);
+    };
+    cleanup().catch(() => process.exit(exitCode));
+  };
+
+  const safeStderrWrite = (msg: string) => {
+    if (shuttingDown) return;
+    try {
+      process.stderr.write(msg);
+    } catch {}
+  };
+
+  process.on('SIGINT', () => shutdown());
+  process.on('SIGTERM', () => shutdown());
+  process.on('uncaughtException', (err) => {
+    safeStderrWrite(`GitNexus MCP (remote) uncaughtException: ${err?.stack || err}\n`);
+    shutdown(1);
+  });
+  process.on('unhandledRejection', (reason: any) => {
+    safeStderrWrite(`GitNexus MCP (remote) unhandledRejection: ${reason?.stack || reason}\n`);
+  });
+  process.stdin.on('end', () => shutdown());
+  process.stdin.on('error', () => shutdown());
+  process.stdout.on('error', () => shutdown());
+  process.stderr.on('error', () => shutdown());
+
   // --- upstream: connect to remote GitNexus via StreamableHTTP ---
   const base = remoteUrl.replace(/\/+$/, '');
   const mcpUrl = new URL(`${base}/api/mcp`);
 
-  // Append auth token from env if the URL doesn't already carry one
   const authToken = process.env.GITNEXUS_REMOTE_TOKEN;
   if (authToken && !mcpUrl.searchParams.has('token')) {
     mcpUrl.searchParams.set('token', authToken);
@@ -46,28 +85,24 @@ export async function startRemoteProxy(remoteUrl: string): Promise<void> {
 
   console.error(`GitNexus: connecting to remote service at ${mcpUrl.origin}${mcpUrl.pathname}`);
 
-  const upstream = new Client({ name: 'gitnexus-remote-proxy', version: pkgVersion });
+  upstream = new Client({ name: 'gitnexus-remote-proxy', version: pkgVersion });
   const transport = new StreamableHTTPClientTransport(mcpUrl);
   await upstream.connect(transport);
   console.error('GitNexus: remote connection established');
 
-  // --- tool whitelist: only expose tools useful for code search ---
-  // CANN repos are C/C++ codebases; web-service tools (route_map, shape_check,
-  // api_impact, tool_map) and repo-mutation tools (rename, detect_changes,
-  // group_sync) add noise without value.
+  // --- tool whitelist ---
   const ALLOWED_TOOLS = new Set(
     (process.env.GITNEXUS_REMOTE_TOOLS ?? 'list_repos,query,context,cypher,impact').split(','),
   );
 
   // --- downstream: stdio server exposed to Claude/Cursor ---
-  const server = new Server(
+  server = new Server(
     { name: 'gitnexus', version: pkgVersion },
     { capabilities: { tools: {}, resources: {}, prompts: {} } },
   );
 
-  // Forward list tools (filtered)
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const result = await upstream.listTools();
+    const result = await upstream!.listTools();
     const filtered = result.tools.filter((t) => ALLOWED_TOOLS.has(t.name));
     console.error(
       `GitNexus: exposing ${filtered.length}/${result.tools.length} tools: ${filtered.map((t) => t.name).join(', ')}`,
@@ -75,7 +110,6 @@ export async function startRemoteProxy(remoteUrl: string): Promise<void> {
     return { tools: filtered };
   });
 
-  // Forward tool calls (reject non-whitelisted)
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     if (!ALLOWED_TOOLS.has(name)) {
@@ -85,7 +119,7 @@ export async function startRemoteProxy(remoteUrl: string): Promise<void> {
     }
     console.error(`GitNexus: remote tool call → ${name}`);
     try {
-      const result = await upstream.callTool({ name, arguments: args ?? {} });
+      const result = await upstream!.callTool({ name, arguments: args ?? {} });
       console.error(`GitNexus: remote tool call ← ${name} (ok)`);
       return { content: result.content };
     } catch (err: any) {
@@ -94,35 +128,30 @@ export async function startRemoteProxy(remoteUrl: string): Promise<void> {
     }
   });
 
-  // Forward list resources
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    const result = await upstream.listResources();
+    const result = await upstream!.listResources();
     return { resources: result.resources };
   });
 
-  // Forward list resource templates
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
-    const result = await upstream.listResourceTemplates();
+    const result = await upstream!.listResourceTemplates();
     return { resourceTemplates: result.resourceTemplates };
   });
 
-  // Forward read resource
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const { uri } = request.params;
-    const result = await upstream.readResource({ uri });
+    const result = await upstream!.readResource({ uri });
     return { contents: result.contents };
   });
 
-  // Forward list prompts
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
-    const result = await upstream.listPrompts();
+    const result = await upstream!.listPrompts();
     return { prompts: result.prompts };
   });
 
-  // Forward get prompt
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    const result = await upstream.getPrompt({ name, arguments: args });
+    const result = await upstream!.getPrompt({ name, arguments: args });
     return { messages: result.messages };
   });
 
@@ -136,31 +165,4 @@ export async function startRemoteProxy(remoteUrl: string): Promise<void> {
   });
   const stdioTransport = new CompatibleStdioServerTransport(process.stdin, _safeStdout);
   await server.connect(stdioTransport);
-
-  // --- graceful shutdown ---
-  let shuttingDown = false;
-  const shutdown = async (exitCode = 0) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    try {
-      await upstream.close();
-    } catch {}
-    try {
-      await server.close();
-    } catch {}
-    process.exit(exitCode);
-  };
-
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
-  process.on('uncaughtException', (err) => {
-    process.stderr.write(`GitNexus MCP (remote) uncaughtException: ${err?.stack || err}\n`);
-    shutdown(1);
-  });
-  process.on('unhandledRejection', (reason: any) => {
-    process.stderr.write(`GitNexus MCP (remote) unhandledRejection: ${reason?.stack || reason}\n`);
-  });
-  process.stdin.on('end', shutdown);
-  process.stdin.on('error', () => shutdown());
-  process.stdout.on('error', () => shutdown());
 }

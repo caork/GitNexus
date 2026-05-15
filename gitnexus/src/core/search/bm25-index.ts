@@ -31,9 +31,13 @@ const FTS_INDEXES: ReadonlyArray<{
   properties: readonly string[];
 }> = [
   { table: 'File', indexName: 'file_fts', properties: ['name', 'content'] },
-  { table: 'Function', indexName: 'function_fts', properties: ['name', 'content'] },
+  {
+    table: 'Function',
+    indexName: 'function_fts',
+    properties: ['name', 'content', 'unresolvedCalls'],
+  },
   { table: 'Class', indexName: 'class_fts', properties: ['name', 'content'] },
-  { table: 'Method', indexName: 'method_fts', properties: ['name', 'content'] },
+  { table: 'Method', indexName: 'method_fts', properties: ['name', 'content', 'unresolvedCalls'] },
   { table: 'Interface', indexName: 'interface_fts', properties: ['name', 'content'] },
 ];
 
@@ -148,7 +152,8 @@ async function queryFTSViaExecutor(
         nodeId: node.nodeId || node.id || '',
       };
     });
-  } catch {
+  } catch (e: any) {
+    console.warn(`[gitnexus] FTS query failed for ${tableName}: ${e?.message ?? e}`);
     return [];
   }
 }
@@ -164,28 +169,36 @@ async function queryFTSViaExecutor(
  * @param repoId - If provided, queries will be routed via the MCP connection pool
  * @returns Ranked search results from FTS indexes
  */
+export interface FTSSearchOutput {
+  results: BM25SearchResult[];
+  ftsAvailable: boolean;
+}
+
 export const searchFTSFromLbug = async (
   query: string,
   limit: number = 20,
   repoId?: string,
-): Promise<BM25SearchResult[]> => {
+): Promise<FTSSearchOutput> => {
   let fileResults: any[],
     functionResults: any[],
     classResults: any[],
     methodResults: any[],
     interfaceResults: any[];
 
+  let ftsAvailable = true;
+
   if (repoId) {
     // Use MCP connection pool via dynamic import
     // IMPORTANT: FTS queries run sequentially to avoid connection contention.
     // The MCP pool supports multiple connections, but FTS is best run serially.
     const poolMod = await import('../lbug/pool-adapter.js');
-    const { executeQuery, addPoolCloseListener } = poolMod;
+    const { executeQuery, addPoolCloseListener, isFtsLoaded } = poolMod;
     // Register the pool-close listener lazily on first use so a teardown of
     // the pool entry (LRU eviction, idle timeout, explicit close) drops the
     // matching `ensuredPoolFTS` entries. Without this, stale ensure-state
     // can outlive the pool that produced it.
     registerPoolCloseListenerOnce(addPoolCloseListener);
+    ftsAvailable = isFtsLoaded(repoId);
     const executor = (cypher: string) => executeQuery(repoId, cypher);
 
     // Lazy-create FTS indexes on first query for this repo (analyze no longer
@@ -257,10 +270,12 @@ export const searchFTSFromLbug = async (
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
-  return sorted.map((r, index) => ({
+  const results = sorted.map((r, index) => ({
     filePath: r.filePath,
     score: r.score,
     rank: index + 1,
     nodeIds: r.nodeIds,
   }));
+
+  return { results, ftsAvailable };
 };

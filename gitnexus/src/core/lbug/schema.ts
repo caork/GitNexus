@@ -46,6 +46,7 @@ CREATE NODE TABLE Function (
   isExported BOOLEAN,
   content STRING,
   description STRING,
+  unresolvedCalls STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -59,6 +60,7 @@ CREATE NODE TABLE Class (
   isExported BOOLEAN,
   content STRING,
   description STRING,
+  unresolvedCalls STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -72,6 +74,7 @@ CREATE NODE TABLE Interface (
   isExported BOOLEAN,
   content STRING,
   description STRING,
+  unresolvedCalls STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -87,6 +90,7 @@ CREATE NODE TABLE Method (
   description STRING,
   parameterCount INT32,
   returnType STRING,
+  unresolvedCalls STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -100,6 +104,7 @@ CREATE NODE TABLE CodeElement (
   isExported BOOLEAN,
   content STRING,
   description STRING,
+  unresolvedCalls STRING,
   PRIMARY KEY (id)
 )`;
 

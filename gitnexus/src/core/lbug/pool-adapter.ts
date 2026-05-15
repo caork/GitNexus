@@ -358,7 +358,24 @@ async function doInitLbug(repoId: string, dbPath: string): Promise<void> {
       await available[0].query('LOAD EXTENSION fts');
       shared.ftsLoaded = true;
     } catch {
-      // Extension may not be installed — FTS queries will fail gracefully
+      try {
+        await available[0].query('INSTALL fts');
+        await available[0].query('LOAD EXTENSION fts');
+        shared.ftsLoaded = true;
+      } catch (err: any) {
+        const msg = err?.message || '';
+        if (
+          msg.includes('already loaded') ||
+          msg.includes('already installed') ||
+          msg.includes('already exists')
+        ) {
+          shared.ftsLoaded = true;
+        } else {
+          console.warn(
+            `[gitnexus] FTS extension load failed: ${msg}. BM25 keyword search will be degraded.`,
+          );
+        }
+      }
     }
   }
 
@@ -437,7 +454,24 @@ export async function initLbugWithDb(
       await available[0].query('LOAD EXTENSION fts');
       shared.ftsLoaded = true;
     } catch {
-      // Extension may already be loaded or not installed
+      try {
+        await available[0].query('INSTALL fts');
+        await available[0].query('LOAD EXTENSION fts');
+        shared.ftsLoaded = true;
+      } catch (err: any) {
+        const msg = err?.message || '';
+        if (
+          msg.includes('already loaded') ||
+          msg.includes('already installed') ||
+          msg.includes('already exists')
+        ) {
+          shared.ftsLoaded = true;
+        } else {
+          console.warn(
+            `[gitnexus] FTS extension load failed: ${msg}. BM25 keyword search will be degraded.`,
+          );
+        }
+      }
     }
   }
 
@@ -631,6 +665,17 @@ export const closeLbug = async (repoId?: string): Promise<void> => {
  * Check if a specific repo's pool is active
  */
 export const isLbugReady = (repoId: string): boolean => pool.has(repoId);
+
+/**
+ * Check if the FTS extension is loaded for a given repo's database.
+ * Returns false if the pool entry doesn't exist or FTS failed to load.
+ */
+export function isFtsLoaded(repoId: string): boolean {
+  const entry = pool.get(repoId);
+  if (!entry) return false;
+  const shared = dbCache.get(entry.dbPath);
+  return shared?.ftsLoaded ?? false;
+}
 
 /** Regex to detect write operations in user-supplied Cypher queries.
  * Note: CALL is NOT blocked — it's used for read-only FTS (CALL QUERY_FTS_INDEX)

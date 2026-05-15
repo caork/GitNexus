@@ -970,15 +970,43 @@ export class LocalBackend {
     limit: number,
   ): Promise<{ results: any[]; ftsUsed: boolean }> {
     const { searchFTSFromLbug } = await import('../../core/search/bm25-index.js');
-    let bm25Results;
+    let ftsOutput;
     try {
-      bm25Results = await searchFTSFromLbug(query, limit, repo.id);
+      ftsOutput = await searchFTSFromLbug(query, limit, repo.id);
     } catch (err: any) {
       console.error('GitNexus: BM25/FTS search failed (FTS indexes may not exist) -', err.message);
       return { results: [], ftsUsed: false };
     }
 
-    const ftsUsed = bm25Results.length === 0 || bm25Results[0]?.ftsUsed !== false;
+    const { results: bm25Results, ftsAvailable } = ftsOutput;
+    const ftsUsed = ftsAvailable;
+
+    // Fallback: when FTS is unavailable, use Cypher CONTAINS scan on name
+    // and unresolvedCalls (skip content — too slow for large repos).
+    if (!ftsAvailable && bm25Results.length === 0) {
+      try {
+        const fallbackRows = await executeParameterized(
+          repo.id,
+          `MATCH (n:Function)
+           WHERE n.name CONTAINS $q OR n.unresolvedCalls CONTAINS $q
+           RETURN n.id AS id, n.name AS name, labels(n)[0] AS type, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine
+           LIMIT $lim`,
+          { q: query, lim: limit },
+        );
+        const fallbackResults = fallbackRows.map((sym: any) => ({
+          nodeId: sym.id || sym[0],
+          name: sym.name || sym[1],
+          type: sym.type || sym[2],
+          filePath: sym.filePath || sym[3],
+          startLine: sym.startLine || sym[4],
+          endLine: sym.endLine || sym[5],
+          bm25Score: 0,
+        }));
+        if (fallbackResults.length > 0) return { results: fallbackResults, ftsUsed: false };
+      } catch {
+        // CONTAINS fallback also failed — continue with empty results
+      }
+    }
 
     const results: any[] = [];
 

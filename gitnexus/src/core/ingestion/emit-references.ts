@@ -95,11 +95,30 @@ export function emitReferencesToGraph(input: EmitReferencesInput): EmitStats {
   let skippedNoCaller = 0;
   let skippedMissingTarget = 0;
 
+  const MAX_UNRESOLVED_PER_NODE = 20;
+  const unresolvedByCallerNode = new Map<string, Set<string>>();
+
   for (const [fromScope, refs] of referenceIndex.bySourceScope) {
     for (const ref of refs) {
       const targetDef = scopes.defs.get(ref.toDef);
       if (targetDef === undefined) {
         skippedMissingTarget++;
+        if (ref.kind === 'call') {
+          const callerId = resolveCallerNodeId(fromScope, scopes);
+          if (callerId) {
+            const targetName = ref.toDef.includes(':')
+              ? ref.toDef.slice(ref.toDef.lastIndexOf(':') + 1)
+              : ref.toDef;
+            if (targetName) {
+              let set = unresolvedByCallerNode.get(callerId);
+              if (!set) {
+                set = new Set();
+                unresolvedByCallerNode.set(callerId, set);
+              }
+              if (set.size < MAX_UNRESOLVED_PER_NODE) set.add(targetName);
+            }
+          }
+        }
         continue;
       }
       const callerId = resolveCallerNodeId(fromScope, scopes);
@@ -109,6 +128,17 @@ export function emitReferencesToGraph(input: EmitReferencesInput): EmitStats {
       }
       graph.addRelationship(buildRelationship(ref, callerId, targetDef, sourceLabel));
       edgesEmitted++;
+    }
+  }
+
+  for (const [nodeId, callNames] of unresolvedByCallerNode) {
+    const node = graph.getNode(nodeId);
+    if (node) {
+      const existing = node.properties.unresolvedCalls as string | undefined;
+      const merged = existing ? new Set([...existing.split(','), ...callNames]) : callNames;
+      node.properties.unresolvedCalls = Array.from(merged)
+        .slice(0, MAX_UNRESOLVED_PER_NODE)
+        .join(',');
     }
   }
 
