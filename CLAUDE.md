@@ -1,4 +1,4 @@
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!--
   Metadata: version, last reviewed, scope, model policy, reference docs, changelog.
   Last updated: 2026-03-22
@@ -21,6 +21,7 @@ This checkout is a **fork** of `abhigyanpatwari/GitNexus` (upstream = `origin`, 
 
 - **All commits and pushes go to `fork` only.** Never push to `origin` / upstream.
 - **Branching:** work directly on `main`; do not create `feat/*` or other topic branches.
+- **Commit policy:** after making changes, always commit to `main` and push to `fork` before ending the task. Do not leave uncommitted work in worktrees — stale worktrees accumulate and changes get lost.
 - **Upstream sync:** pull from `origin/main` → merge into local `main` → push to `fork`.
 - **Offline-at-startup is a preserved invariant:** `gitnexus serve` and `gitnexus mcp` must not trigger network downloads at startup. Embedding models are opt-in via `gitnexus analyze --embeddings` (or configured via the post-startup embedding API); pre-download anything else before running.
 
@@ -56,6 +57,7 @@ If always-on instructions grow, load deep conventions via conditional reads (e.g
 
 | Date | Version | Change |
 |------|---------|--------|
+| 2026-05-15 | 1.5.0 | Added commit policy: always commit and push before ending tasks; don't leave work in worktrees. |
 | 2026-04-21 | 1.4.0 | Added fork-development policy (push to `fork` only, offline-at-startup invariant). |
 | 2026-04-13 | 1.3.0 | Updated GitNexus index stats after DAG refactor. |
 | 2026-03-24 | 1.2.0 | Removed duplicated gitnexus:start block and scope table; replaced with pointers to AGENTS.md. |
