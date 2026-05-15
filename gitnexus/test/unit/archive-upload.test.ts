@@ -7,7 +7,7 @@ import {
   findProjectRoot,
   extractArchive,
 } from '../../src/server/archive-utils.js';
-import tar from 'tar';
+import * as tar from 'tar';
 
 describe('archive-upload helpers', () => {
   let tmpDir: string;

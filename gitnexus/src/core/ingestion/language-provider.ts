@@ -215,6 +215,10 @@ interface LanguageProviderConfig {
     nodeName: string,
     captureMap: CaptureMap,
   ) => string | undefined;
+  /** Normalise source code before tree-sitter parsing (e.g., strip non-standard
+   *  keywords in Ascend C). Must preserve byte length for accurate source mapping.
+   *  Default: undefined (no preprocessing). */
+  readonly sourcePreprocessor?: (source: string, filePath: string) => string;
   /** Detect if a file contains framework route definitions (e.g., Laravel routes.php).
    *  When true, the worker extracts routes via the language's route extraction logic.
    *  Default: undefined (no route files). */

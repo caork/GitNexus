@@ -49,6 +49,7 @@ const languageMap: Record<string, any> = {
   [SupportedLanguages.Vue]: TypeScript.typescript,
   ...(Dart ? { [SupportedLanguages.Dart]: Dart } : {}),
   ...(Swift ? { [SupportedLanguages.Swift]: Swift } : {}),
+  [SupportedLanguages.AscendC]: CPP,
 };
 
 export const isLanguageAvailable = (language: SupportedLanguages): boolean =>

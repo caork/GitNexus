@@ -139,7 +139,7 @@ describe('API key file permissions', () => {
     // by reading the source and checking statically.
     // The actual chmod behavior is platform-dependent.
     const source = await fs.readFile(
-      path.join(process.cwd(), 'src', 'storage', 'repo-manager.ts'),
+      path.resolve(__dirname, '..', '..', 'src', 'storage', 'repo-manager.ts'),
       'utf-8',
     );
     expect(source).toContain('chmod(configPath, 0o600)');

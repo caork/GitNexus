@@ -10,7 +10,6 @@ import type { SymbolTableReader, SymbolTableWriter, ExtractedHeritage } from './
 import { ASTCache } from './ast-cache.js';
 import { getLanguageFromFilename, SupportedLanguages } from 'gitnexus-shared';
 import { extractVueScript, isVueSetupTopLevel } from './vue-sfc-extractor.js';
-import { preprocessAscendC } from './ascend-c-preprocessor.js';
 import { yieldToEventLoop } from './utils/event-loop.js';
 import {
   getDefinitionNodeFromCaptures,
@@ -365,10 +364,11 @@ const processParsingSequential = async (
       isVueSetup = extracted.isSetup;
     }
 
-    // Ascend C (.asc) preprocessing: strip non-standard attributes so
-    // tree-sitter C++ can parse the file without errors.
-    if (file.path.endsWith('.asc')) {
-      parseContent = preprocessAscendC(parseContent);
+    const provider = getProvider(language);
+
+    // Language-specific preprocessing (e.g., Ascend C attribute stripping).
+    if (provider.sourcePreprocessor) {
+      parseContent = provider.sourcePreprocessor(parseContent, file.path);
     }
 
     try {
@@ -388,8 +388,6 @@ const processParsingSequential = async (
     }
 
     astCache.set(file.path, tree);
-
-    const provider = getProvider(language);
     // Mirror into the cross-phase cache only when the language has a
     // scope-resolution consumer — otherwise we retain Trees no one
     // reads. parse-impl clears `astCache` between chunks;

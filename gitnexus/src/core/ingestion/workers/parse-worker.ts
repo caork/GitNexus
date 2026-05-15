@@ -316,6 +316,7 @@ const languageMap: Record<string, TreeSitterLanguage> = {
   [SupportedLanguages.Vue]: TypeScript.typescript,
   ...(Dart ? { [SupportedLanguages.Dart]: Dart } : {}),
   ...(Swift ? { [SupportedLanguages.Swift]: Swift } : {}),
+  [SupportedLanguages.AscendC]: CPP,
 };
 
 /**
@@ -1364,6 +1365,8 @@ const processFileGroup = (
     return;
   }
 
+  const provider = getProvider(language);
+
   for (const file of files) {
     // Skip files larger than the max tree-sitter buffer (32 MB)
     if (file.content.length > TREE_SITTER_MAX_BUFFER) continue;
@@ -1378,6 +1381,11 @@ const processFileGroup = (
       parseContent = extracted.scriptContent;
       lineOffset = extracted.lineOffset;
       isVueSetup = extracted.isSetup;
+    }
+
+    // Language-specific preprocessing (e.g., Ascend C attribute stripping).
+    if (provider.sourcePreprocessor) {
+      parseContent = provider.sourcePreprocessor(parseContent, file.path);
     }
 
     clearCaches(); // Reset memoization before each new file
@@ -1406,8 +1414,6 @@ const processFileGroup = (
       );
       continue;
     }
-
-    const provider = getProvider(language);
 
     // RFC #909 Ring 2: produce a `ParsedFile` for the new scope-based
     // resolution pipeline. No-op (returns undefined) for every language

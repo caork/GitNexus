@@ -26,10 +26,14 @@ vi.mock('../../../src/mcp/core/lbug-adapter.js', async (importOriginal) => {
   return { ...actual, ...lbugMocks };
 });
 
-vi.mock('../../../src/storage/repo-manager.js', () => ({
-  listRegisteredRepos: vi.fn().mockResolvedValue([]),
-  cleanupOldKuzuFiles: vi.fn().mockResolvedValue({ found: false, needsReindex: false }),
-}));
+vi.mock('../../../src/storage/repo-manager.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/storage/repo-manager.js')>();
+  return {
+    ...actual,
+    listRegisteredRepos: vi.fn().mockResolvedValue([]),
+    cleanupOldKuzuFiles: vi.fn().mockResolvedValue({ found: false, needsReindex: false }),
+  };
+});
 
 vi.mock('../../../src/core/search/bm25-index.js', () => ({
   searchFTSFromLbug: vi.fn().mockResolvedValue({ results: [], ftsAvailable: true }),
