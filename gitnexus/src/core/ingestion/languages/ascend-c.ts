@@ -19,16 +19,17 @@ import { CPP_QUERIES } from '../tree-sitter-queries.js';
 import { createFieldExtractor } from '../field-extractors/generic.js';
 import { cppConfig as cppFieldConfig } from '../field-extractors/configs/c-cpp.js';
 import { createMethodExtractor } from '../method-extractors/generic.js';
-import { cppMethodConfig } from '../method-extractors/configs/c-cpp.js';
+import { ascendCMethodConfig } from '../method-extractors/configs/ascend-c.js';
 import { createVariableExtractor } from '../variable-extractors/generic.js';
 import { cppVariableConfig } from '../variable-extractors/configs/c-cpp.js';
 import { createCallExtractor } from '../call-extractors/generic.js';
 import { ascendCCallConfig } from '../call-extractors/configs/ascend-c.js';
 import { createHeritageExtractor } from '../heritage-extractors/generic.js';
-import { preprocessAscendC } from '../ascend-c-preprocessor.js';
+import { preprocessAscendC, getAscendCAttributesForCurrentFile } from '../ascend-c-preprocessor.js';
+import { getDefinitionNodeFromCaptures } from '../utils/ast-helpers.js';
 import type { SyntaxNode } from '../utils/ast-helpers.js';
 import type { NodeLabel } from 'gitnexus-shared';
-import type { LanguageProvider } from '../language-provider.js';
+import type { LanguageProvider, CaptureMap } from '../language-provider.js';
 
 /**
  * C/C++ function name extraction — shared with c-cpp.ts.
@@ -213,17 +214,39 @@ const ASCEND_C_BUILT_INS: ReadonlySet<string> = new Set([
   'sizeof',
   'assert',
 
+  // ── C++ standard library ──
+  'std',
+  'make_shared',
+  'make_unique',
+  'move',
+  'forward',
+  'static_cast',
+  'dynamic_cast',
+  'reinterpret_cast',
+  'const_cast',
+
   // ── Data movement ──
   'DataCopy',
   'DataCopyExtParams',
   'DataCopyPad',
   'DataCopyPadExtParams',
+  'DataCopyB2S',
+  'DataCopyS2B',
+  'DataCopyB2B',
+  'DataCopyDepadB2B',
+  'DataCopyND2NZ',
+  'DataCopyNZ2ND',
+  'LoadData',
+  'LoadData2D',
+  'LoadData2dParams',
+  'LoadDataWithFlag',
+  'StoreData',
   'EnQue',
   'DeQue',
   'FreeTensor',
   'AllocTensor',
 
-  // ── Compute — vector/scalar ──
+  // ── Compute — vector/scalar/cube ──
   'Add',
   'Sub',
   'Mul',
@@ -231,6 +254,7 @@ const ASCEND_C_BUILT_INS: ReadonlySet<string> = new Set([
   'Abs',
   'Exp',
   'Log',
+  'Ln',
   'Reciprocal',
   'Sqrt',
   'Rsqrt',
@@ -248,7 +272,9 @@ const ASCEND_C_BUILT_INS: ReadonlySet<string> = new Set([
   'ReduceSum',
   'ReduceMax',
   'ReduceMin',
+  'ReduceMean',
   'Matmul',
+  'MatmulObj',
   'Conv2D',
   'Softmax',
   'TopK',
@@ -270,6 +296,56 @@ const ASCEND_C_BUILT_INS: ReadonlySet<string> = new Set([
   'Not',
   'And',
   'Or',
+  'BitwiseAnd',
+  'BitwiseOr',
+  'BitwiseNot',
+  'ShiftLeft',
+  'ShiftRight',
+  'Clamp',
+  'LeakyRelu',
+  'PRelu',
+  'Gelu',
+  'Erf',
+  'Power',
+  'Mod',
+  'Atan',
+  'Atan2',
+  'Sin',
+  'Cos',
+  'Asin',
+  'Acos',
+  'Sinh',
+  'Cosh',
+  'Sign',
+  'IsFinite',
+  'IsNan',
+  'ConvertTo',
+
+  // ── Scalar operations ──
+  'ScalarAdd',
+  'ScalarSub',
+  'ScalarMul',
+  'ScalarDiv',
+  'ScalarMax',
+  'ScalarMin',
+  'ScalarAbs',
+
+  // ── Vector advanced ──
+  'WholeReduceSum',
+  'WholeReduceMax',
+  'WholeReduceMin',
+  'VectorDup',
+  'PadCustom',
+  'RepeatMode',
+  'BinaryRepeatParams',
+  'UnaryRepeatParams',
+
+  // ── Cube (matrix) compute ──
+  'Mmad',
+  'MmadObj',
+  'Fixpipe',
+  'FixpipeObj',
+  'SetFixpipeNz2Nd',
 
   // ── Atomic operations ──
   'SetAtomicAdd',
@@ -293,17 +369,48 @@ const ASCEND_C_BUILT_INS: ReadonlySet<string> = new Set([
   'GetSize',
   'GetLength',
   'SetSize',
+  'GetValue',
+  'SetValue',
+  'GetPhyAddr',
+  'ReinterpretCast',
+
+  // ── Tiling (kernel launch parameters) ──
+  'TilingData',
+  'GET_TILING_DATA',
+  'TilingContext',
+  'AscendCPlatform',
+  'GetUserWorkspace',
 
   // ── Synchronisation ──
   'PipeBarrier',
   'SetFlag',
   'WaitFlag',
   'SyncAll',
+  'CrossCoreSync',
+  'WaitBarrier',
+  'SetBarrier',
 
   // ── Runtime helpers ──
   'GetBlockNum',
   'GetBlockIdx',
+  'GetTaskRation',
+  'GetSysWorkSpacePtr',
   'AscendC',
+
+  // ── Data type qualifiers ──
+  'half',
+  'float16_t',
+  'bfloat16_t',
+  'int4b_t',
+  'uint4b_t',
+  'int8_t',
+  'uint8_t',
+  'int16_t',
+  'uint16_t',
+  'int32_t',
+  'uint32_t',
+  'int64_t',
+  'uint64_t',
 
   // ── Pipe type constants (enum-like, appear as identifiers) ──
   'PIPE_MTE1',
@@ -315,7 +422,103 @@ const ASCEND_C_BUILT_INS: ReadonlySet<string> = new Set([
   'PIPE_A',
   'PIPE_B',
   'PIPE_CU',
+  'PIPE_ALL',
+
+  // ── Buffer position constants ──
+  'VECIN',
+  'VECOUT',
+  'VECCALC',
+  'A1',
+  'A2',
+  'B1',
+  'B2',
+  'CO1',
+  'CO2',
+
+  // ── KernelOperator base class (extended by user kernel classes) ──
+  'KernelOperator',
+  'KfcKernelBase',
 ]);
+
+// ============================================================================
+// Description extractor — Ascend C domain semantics
+// ============================================================================
+
+/**
+ * Produce human-readable descriptions for Ascend C code elements.
+ *
+ * These descriptions appear in query/context results and give the agent
+ * immediate domain knowledge:
+ *
+ *   - `__global__` method/function → "Kernel entry point"
+ *   - `__aicore__` method/function → "Device compute function (AI Core)"
+ *   - `__aicpu__` method/function  → "Host-side AI CPU function"
+ *   - `__vector__` method/function → "Vector compute function"
+ *   - Class containing `__aicore__` methods → "Kernel operator class"
+ *   - Class extending a kernel base → "Kernel operator class"
+ */
+const ascendCDescriptionExtractor = (
+  nodeLabel: NodeLabel,
+  nodeName: string,
+  captureMap: CaptureMap,
+): string | undefined => {
+  // Get the definition node to find its line range
+  const defNode = getDefinitionNodeFromCaptures(captureMap);
+  if (!defNode) return undefined;
+
+  const startLine = defNode.startPosition.row + 1;
+  const endLine = defNode.endPosition.row + 1;
+  const attrs = getAscendCAttributesForCurrentFile(startLine, endLine);
+
+  if (nodeLabel === 'Function' || nodeLabel === 'Method') {
+    // Prioritise __global__ (kernel entry) over __aicore__ (device compute)
+    if (attrs.includes('__global__')) {
+      return 'Kernel entry point (host-callable)';
+    }
+    if (attrs.includes('__aicore__')) {
+      return 'Device compute function (AI Core)';
+    }
+    if (attrs.includes('__aicpu__')) {
+      return 'Host-side AI CPU function';
+    }
+    if (attrs.includes('__vector__')) {
+      return 'Vector compute function';
+    }
+    // Well-known kernel lifecycle methods
+    if (nodeName === 'Init' || nodeName === 'Process') {
+      // These are likely kernel methods even without attributes — check parent
+      const parent = defNode.parent;
+      if (
+        parent?.type === 'field_declaration_list' &&
+        (parent.parent?.type === 'class_specifier' || parent.parent?.type === 'struct_specifier')
+      ) {
+        if (nodeName === 'Init') return 'Kernel initialisation method';
+        if (nodeName === 'Process') return 'Kernel compute entry (per-core)';
+      }
+    }
+  }
+
+  if (nodeLabel === 'Class' || nodeLabel === 'Struct') {
+    // Check if this class/struct has any __aicore__ or __global__ methods
+    // by scanning its body's line range in the attribute cache
+    if (attrs.includes('__aicore__') || attrs.includes('__global__')) {
+      return 'Kernel operator class';
+    }
+    // Check heritage: classes extending known kernel base types
+    if (defNode.text) {
+      const snippet = defNode.text.slice(0, 500); // First 500 chars
+      if (
+        snippet.includes('KernelOperator') ||
+        snippet.includes('KfcKernelBase') ||
+        snippet.includes('OpDef')
+      ) {
+        return 'Kernel operator class';
+      }
+    }
+  }
+
+  return undefined;
+};
 
 export const ascendCProvider = defineLanguage({
   id: SupportedLanguages.AscendC,
@@ -329,7 +532,7 @@ export const ascendCProvider = defineLanguage({
   callExtractor: createCallExtractor(ascendCCallConfig),
   fieldExtractor: createFieldExtractor(cppFieldConfig),
   methodExtractor: createMethodExtractor({
-    ...cppMethodConfig,
+    ...ascendCMethodConfig,
     extractFunctionName: ascendCExtractFunctionName,
   }),
   variableExtractor: createVariableExtractor(cppVariableConfig),
@@ -338,4 +541,5 @@ export const ascendCProvider = defineLanguage({
   labelOverride: ascendCLabelOverride,
   builtInNames: ASCEND_C_BUILT_INS,
   preprocessSource: preprocessAscendC,
+  descriptionExtractor: ascendCDescriptionExtractor,
 });

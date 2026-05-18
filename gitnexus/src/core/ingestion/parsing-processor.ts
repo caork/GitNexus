@@ -698,6 +698,9 @@ const processParsingSequential = async (
         ? detectFrameworkFromAST(language, (definitionNode.text || '').slice(0, 300))
         : null;
 
+      // Description extraction — mirrors parse-worker.ts line 2170.
+      const description = provider.descriptionExtractor?.(nodeLabel, nodeName, captureMap);
+
       const node: GraphNode = {
         id: nodeId,
         label: nodeLabel as NodeLabel,
@@ -732,6 +735,7 @@ const processParsingSequential = async (
                 astFrameworkReason: frameworkHint.reason,
               }
             : {}),
+          ...(description !== undefined ? { description } : {}),
           ...methodProps,
         },
       };
