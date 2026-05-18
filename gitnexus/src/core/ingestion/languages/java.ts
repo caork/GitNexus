@@ -11,6 +11,7 @@ import { SupportedLanguages } from 'gitnexus-shared';
 import { createClassExtractor } from '../class-extractors/generic.js';
 import { javaClassConfig } from '../class-extractors/configs/jvm.js';
 import { defineLanguage } from '../language-provider.js';
+import type { AstFrameworkPatternConfig } from '../language-provider.js';
 import { javaTypeConfig } from '../type-extractors/jvm.js';
 import { javaExportChecker } from '../export-detection.js';
 import { createImportResolver } from '../import-resolvers/resolver-factory.js';
@@ -26,10 +27,42 @@ import { javaMethodConfig } from '../method-extractors/configs/jvm.js';
 import { createVariableExtractor } from '../variable-extractors/generic.js';
 import { javaVariableConfig } from '../variable-extractors/configs/jvm.js';
 import { createHeritageExtractor } from '../heritage-extractors/generic.js';
+import {
+  emitJavaScopeCaptures,
+  interpretJavaImport,
+  interpretJavaTypeBinding,
+  javaBindingScopeFor,
+  javaImportOwningScope,
+  javaMergeBindings,
+  javaReceiverBinding,
+  javaArityCompatibility,
+  resolveJavaImportTarget,
+} from './java/index.js';
 
 export const javaProvider = defineLanguage({
   id: SupportedLanguages.Java,
   extensions: ['.java'],
+  entryPointPatterns: [/^do[A-Z]/, /^create[A-Z]/, /^build[A-Z]/, /Service$/],
+  astFrameworkPatterns: [
+    {
+      framework: 'spring',
+      entryPointMultiplier: 3.2,
+      reason: 'spring-annotation',
+      patterns: [
+        '@RestController',
+        '@Controller',
+        '@GetMapping',
+        '@PostMapping',
+        '@RequestMapping',
+      ],
+    },
+    {
+      framework: 'jaxrs',
+      entryPointMultiplier: 3.0,
+      reason: 'jaxrs-annotation',
+      patterns: ['@Path', '@GET', '@POST', '@PUT', '@DELETE'],
+    },
+  ] satisfies AstFrameworkPatternConfig[],
   treeSitterQueries: JAVA_QUERIES,
   typeConfig: javaTypeConfig,
   exportChecker: javaExportChecker,
@@ -43,4 +76,15 @@ export const javaProvider = defineLanguage({
   variableExtractor: createVariableExtractor(javaVariableConfig),
   classExtractor: createClassExtractor(javaClassConfig),
   heritageExtractor: createHeritageExtractor(SupportedLanguages.Java),
+
+  // ── RFC #909 Ring 3: scope-based resolution hooks ──
+  emitScopeCaptures: emitJavaScopeCaptures,
+  interpretImport: interpretJavaImport,
+  interpretTypeBinding: interpretJavaTypeBinding,
+  bindingScopeFor: javaBindingScopeFor,
+  importOwningScope: javaImportOwningScope,
+  mergeBindings: (_scope, bindings) => javaMergeBindings(bindings),
+  receiverBinding: javaReceiverBinding,
+  arityCompatibility: javaArityCompatibility,
+  resolveImportTarget: resolveJavaImportTarget,
 });

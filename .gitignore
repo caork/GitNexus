@@ -109,3 +109,5 @@ local_docs/
 # Local agent scratch / review prompts (never commit)
 .tmp/
 .agents/
+.context/
+gitnexus/web/

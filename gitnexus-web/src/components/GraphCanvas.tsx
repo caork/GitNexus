@@ -1,18 +1,17 @@
-import { useEffect, useCallback, useMemo, useState, forwardRef, useImperativeHandle, useRef } from 'react';
+import {
+  useEffect,
+  useCallback,
+  useMemo,
+  useState,
+  forwardRef,
+  useImperativeHandle,
+  useRef,
+} from 'react';
 import ForceGraph3D from 'react-force-graph-3d';
 import * as THREE from 'three';
-import {
-  Maximize2,
-  Focus,
-  RotateCcw,
-  Lightbulb,
-  LightbulbOff,
-} from '@/lib/lucide-icons';
+import { Maximize2, Focus, RotateCcw, Lightbulb, LightbulbOff } from '@/lib/lucide-icons';
 import { useAppState } from '../hooks/useAppState';
-import {
-  knowledgeGraphToGraphology,
-  filterGraphByDepth
-} from '../lib/graph-adapter';
+import { knowledgeGraphToGraphology, filterGraphByDepth } from '../lib/graph-adapter';
 import type { GraphNode } from 'gitnexus-shared';
 import { QueryFAB } from './QueryFAB';
 import Graph from 'graphology';
@@ -43,19 +42,19 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
   } = useAppState();
 
   const [hoveredNodeName, setHoveredNodeName] = useState<string | null>(null);
-  const fgRef = useRef<any>();
+  const fgRef = useRef<any>(null);
   const [internalGraph, setInternalGraph] = useState<Graph | null>(null);
 
   // 生成“锐利核心 + 边缘柔光”贴片，既保持发光感又绝对不糊
   const crispGlowTexture = useMemo(() => {
     const canvas = document.createElement('canvas');
-    canvas.width = 128; 
+    canvas.width = 128;
     canvas.height = 128;
     const ctx = canvas.getContext('2d');
     if (ctx) {
       const cx = 64;
       const cy = 64;
-      
+
       // 1. 绘制绝对锐利、无虚化的核心边缘 (Radius: 40)
       ctx.beginPath();
       ctx.arc(cx, cy, 40, 0, 2 * Math.PI, false);
@@ -66,7 +65,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
       const gradient = ctx.createRadialGradient(cx, cy, 40, cx, cy, 60);
       gradient.addColorStop(0, 'rgba(255, 255, 255, 0.4)');
       gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-      
+
       ctx.beginPath();
       ctx.arc(cx, cy, 60, 0, 2 * Math.PI, false);
       ctx.fillStyle = gradient;
@@ -75,7 +74,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     const tex = new THREE.CanvasTexture(canvas);
     return tex;
   }, []);
-  
+
   // Create unified graphology object when backend graph changes
   useEffect(() => {
     if (!backendGraph) return;
@@ -123,7 +122,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
 
     // Apply filters.
     if (internalGraph.order > 0) {
-      filterGraphByDepth(internalGraph as any, appSelectedNode?.id || null, depthFilter, visibleLabels);
+      filterGraphByDepth(
+        internalGraph as any,
+        appSelectedNode?.id || null,
+        depthFilter,
+        visibleLabels,
+      );
     }
 
     const gNodes: any[] = [];
@@ -136,7 +140,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     internalGraph.forEachEdge((edge, attr, source, target) => {
       const sourceHidden = internalGraph.getNodeAttribute(source, 'hidden');
       const targetHidden = internalGraph.getNodeAttribute(target, 'hidden');
-      
+
       let visible = true;
       if (visibleEdgeTypes && attr.relationType) {
         if (!visibleEdgeTypes.includes(attr.relationType as any)) visible = false;
@@ -157,43 +161,48 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
       if (n) {
         setSelectedNode(n);
         openCodePanel();
-        
+
         if (fgRef.current) {
           const distance = 100;
-          const distRatio = 1 + distance/Math.hypot(node.x, node.y, node.z);
+          const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
           fgRef.current.cameraPosition(
             { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
             node,
-            1500
+            1500,
           );
         }
       }
     },
-    [backendGraph, nodeById, setSelectedNode, openCodePanel]
+    [backendGraph, nodeById, setSelectedNode, openCodePanel],
   );
 
-  useImperativeHandle(ref, () => ({
-    focusNode: (nodeId: string) => {
-      if (backendGraph) {
-        const node = nodeById.get(nodeId);
-        if (node) {
-          setSelectedNode(node);
-          openCodePanel();
-          
-          const fgNode = graphData3D.nodes.find(n => n.id === nodeId);
-          if (fgRef.current && fgNode) {
-            const distance = 100;
-            const distRatio = 1 + distance/Math.hypot(fgNode.x||0.1, fgNode.y||0.1, fgNode.z||0.1);
-            fgRef.current.cameraPosition(
-              { x: fgNode.x * distRatio, y: fgNode.y * distRatio, z: fgNode.z * distRatio },
-              fgNode,
-              1500
-            );
+  useImperativeHandle(
+    ref,
+    () => ({
+      focusNode: (nodeId: string) => {
+        if (backendGraph) {
+          const node = nodeById.get(nodeId);
+          if (node) {
+            setSelectedNode(node);
+            openCodePanel();
+
+            const fgNode = graphData3D.nodes.find((n) => n.id === nodeId);
+            if (fgRef.current && fgNode) {
+              const distance = 100;
+              const distRatio =
+                1 + distance / Math.hypot(fgNode.x || 0.1, fgNode.y || 0.1, fgNode.z || 0.1);
+              fgRef.current.cameraPosition(
+                { x: fgNode.x * distRatio, y: fgNode.y * distRatio, z: fgNode.z * distRatio },
+                fgNode,
+                1500,
+              );
+            }
           }
         }
-      }
-    },
-  }), [graphData3D.nodes, backendGraph, nodeById, setSelectedNode, openCodePanel]);
+      },
+    }),
+    [graphData3D.nodes, backendGraph, nodeById, setSelectedNode, openCodePanel],
+  );
 
   const handleToggleAIHighlights = useCallback(() => {
     if (isAIHighlightsEnabled) {
@@ -214,7 +223,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
 
   const resetZoom = useCallback(() => {
     if (fgRef.current) {
-      fgRef.current.cameraPosition({ x: 0, y: 0, z: Math.pow(graphData3D.nodes.length, 1/3) * 120 }, { x: 0, y: 0, z: 0 }, 1000);
+      fgRef.current.cameraPosition(
+        { x: 0, y: 0, z: Math.pow(graphData3D.nodes.length, 1 / 3) * 120 },
+        { x: 0, y: 0, z: 0 },
+        1000,
+      );
     }
     setSelectedNode(null);
   }, [setSelectedNode, graphData3D.nodes.length]);
@@ -225,14 +238,15 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
 
   const handleFocusSelected = useCallback(() => {
     if (appSelectedNode) {
-      const fgNode = graphData3D.nodes.find(n => n.id === appSelectedNode.id);
+      const fgNode = graphData3D.nodes.find((n) => n.id === appSelectedNode.id);
       if (fgRef.current && fgNode) {
         const distance = 100;
-        const distRatio = 1 + distance/Math.hypot(fgNode.x||0.1, fgNode.y||0.1, fgNode.z||0.1);
+        const distRatio =
+          1 + distance / Math.hypot(fgNode.x || 0.1, fgNode.y || 0.1, fgNode.z || 0.1);
         fgRef.current.cameraPosition(
           { x: fgNode.x * distRatio, y: fgNode.y * distRatio, z: fgNode.z * distRatio },
           fgNode,
-          1000
+          1000,
         );
       }
     }
@@ -253,26 +267,26 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
             const isSelected = appSelectedNode?.id === node.id;
             const isBlast = effectiveBlastRadiusNodeIds.has(node.id);
             const isHighlight = effectiveHighlightedNodeIds.has(node.id);
-            
+
             let nodeColor = node.color || '#9ca3af';
-            if (isBlast) nodeColor = '#ef4444'; 
+            if (isBlast) nodeColor = '#ef4444';
             else if (isHighlight) nodeColor = '#06b6d4';
             else if (isSelected) nodeColor = '#ffffff';
             else if (appSelectedNode && !isSelected) nodeColor = '#333344'; // Dim
-            
+
             const size = node.size || 5;
 
             // 恢复正常的材质渲染逻辑，避免加法混合导致边缘消失
-            const material = new THREE.SpriteMaterial({ 
+            const material = new THREE.SpriteMaterial({
               map: crispGlowTexture,
               color: nodeColor,
               depthWrite: false, // 依然优化性能
-              transparent: true
+              transparent: true,
             });
-            
+
             const sprite = new THREE.Sprite(material);
             sprite.scale.set(size * 2, size * 2, 1);
-            
+
             return sprite;
           }}
           onNodeClick={handleNodeClick}

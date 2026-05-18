@@ -30,14 +30,15 @@
 import type { PipelinePhase, PipelineContext, PhaseResult } from '../../pipeline-phases/types.js';
 import { getPhaseOutput } from '../../pipeline-phases/types.js';
 import type { StructureOutput } from '../../pipeline-phases/structure.js';
+import type { ParseOutput } from '../../pipeline-phases/parse.js';
 import { isRegistryPrimary } from '../../registry-primary-flag.js';
 import { SupportedLanguages, getLanguageFromFilename } from 'gitnexus-shared';
 import { readFileContents } from '../../filesystem-walker.js';
 import { runScopeResolution } from './run.js';
 import { SCOPE_RESOLVERS } from './registry.js';
-import { isDev } from '../../utils/env.js';
-import type { ASTCacheReader } from '../../ast-cache.js';
+import { isDev, isSemanticModelValidatorEnabled } from '../../utils/env.js';
 
+import { logger } from '../../../logger.js';
 export interface ScopeResolutionOutput {
   /** True when at least one language ran. */
   readonly ran: boolean;
@@ -91,7 +92,25 @@ export const scopeResolutionPhase: PipelinePhase<ScopeResolutionOutput> = {
     // skip a second tree-sitter parse. Cache miss is safe (re-parses).
     // Worker-mode parses leave the cache empty for those files; they
     // also fall back to a fresh parse — no correctness impact.
-    const { scopeTreeCache } = getPhaseOutput<{ scopeTreeCache: ASTCacheReader }>(deps, 'parse');
+    const parseOutput = getPhaseOutput<ParseOutput>(deps, 'parse');
+    const { scopeTreeCache, resolutionContext, parsedFiles: workerParsedFiles } = parseOutput;
+    // SemanticModel populated during `parse`: scope-resolution consumes
+    // TypeRegistry / MethodRegistry / SymbolTable lookups instead of
+    // rebuilding parallel indexes. See ARCHITECTURE.md § "Semantic-model
+    // source of truth".
+    const model = resolutionContext.model;
+
+    // Build a per-file lookup of ParsedFile artifacts the workers (or
+    // sequential extracts) already produced. Threading this into
+    // `runScopeResolution` lets the per-language extract loop short-
+    // circuit `extractParsedFile` — the dominant cost on the warm-cache
+    // path, since workers can't return tree-sitter Trees across the
+    // MessageChannel and scope-resolution would otherwise re-parse
+    // every file from scratch on the main thread.
+    const preExtractedByPath = new Map<string, import('gitnexus-shared').ParsedFile>();
+    for (const pf of workerParsedFiles) {
+      preExtractedByPath.set(pf.filePath, pf);
+    }
 
     let totalFiles = 0;
     let totalImports = 0;
@@ -120,13 +139,27 @@ export const scopeResolutionPhase: PipelinePhase<ScopeResolutionOutput> = {
         if (content !== undefined) files.push({ path: fp, content });
       }
 
+      // Load per-language import-resolution config (tsconfig paths,
+      // composer.json autoload, go.mod, ...). One I/O round trip per
+      // workspace pass — cached implicitly by the result handed to
+      // every `resolveImportTarget` call below.
+      const resolutionConfig =
+        provider.loadResolutionConfig !== undefined
+          ? await provider.loadResolutionConfig(ctx.repoPath)
+          : undefined;
+
       const stats = runScopeResolution(
         {
           graph: ctx.graph,
+          model,
           files,
           treeCache: scopeTreeCache,
+          resolutionConfig,
+          preExtractedParsedFiles: preExtractedByPath,
           onWarn: (msg) => {
-            if (isDev) console.warn(`[scope-resolution:${lang}] ${msg}`);
+            if (isSemanticModelValidatorEnabled()) {
+              logger.warn(`[scope-resolution:${lang}] ${msg}`);
+            }
           },
         },
         provider,
@@ -143,7 +176,7 @@ export const scopeResolutionPhase: PipelinePhase<ScopeResolutionOutput> = {
       });
 
       if (isDev) {
-        console.log(
+        logger.info(
           `[scope-resolution:${lang}] ${stats.filesProcessed} files → ${stats.importsEmitted} IMPORTS + ${stats.referenceEdgesEmitted} reference edges (${stats.resolve.unresolved} unresolved sites, ${stats.referenceSkipped} skipped)`,
         );
       }

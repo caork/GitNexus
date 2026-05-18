@@ -1,9 +1,11 @@
 import * as path from 'node:path';
 import { glob } from 'glob';
 import Parser from 'tree-sitter';
+import { createIgnoreFilter } from '../../../config/ignore-service.js';
 import type { ContractExtractor, CypherExecutor } from '../contract-extractor.js';
 import type { ExtractedContract, RepoHandle } from '../types.js';
 import { readSafe } from './fs-utils.js';
+import { parseSourceSafe } from '../../tree-sitter/safe-parse.js';
 import { getPluginForFile, HTTP_SCAN_GLOB, type HttpDetection } from './http-patterns/index.js';
 
 /**
@@ -171,7 +173,7 @@ export class HttpRouteExtractor implements ContractExtractor {
       }
       try {
         parser.setLanguage(plugin.language);
-        const tree = parser.parse(content);
+        const tree = parseSourceSafe(parser, content);
         const detections = plugin.scan(tree);
         cachedDetections.set(rel, detections);
         return detections;
@@ -208,9 +210,16 @@ export class HttpRouteExtractor implements ContractExtractor {
   }
 
   private async scanFiles(repoPath: string): Promise<string[]> {
+    // Honour `.gitnexusignore` and `.gitignore` via the shared IgnoreService
+    // so contract extraction respects the same exclusion rules as the rest of
+    // the ingestion pipeline. Mirrors `filesystem-walker.ts` which uses the
+    // same shape. Replaces a hardcoded `[node_modules, .git, dist, build,
+    // vendor]` array — those names are still in `DEFAULT_IGNORE_LIST`, so
+    // default behaviour is preserved (#1185).
+    const ignoreFilter = await createIgnoreFilter(repoPath);
     return glob(HTTP_SCAN_GLOB, {
       cwd: repoPath,
-      ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/vendor/**'],
+      ignore: ignoreFilter,
       nodir: true,
     });
   }

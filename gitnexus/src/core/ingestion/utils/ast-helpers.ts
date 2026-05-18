@@ -2,6 +2,11 @@ import type Parser from 'tree-sitter';
 import type { Capture, NodeLabel, Range } from 'gitnexus-shared';
 import type { LanguageProvider } from '../language-provider.js';
 import { generateId } from '../../../lib/utils.js';
+import {
+  extractTemplateArguments,
+  stripTemplateArguments,
+  templateArgumentsIdTag,
+} from './template-arguments.js';
 
 /** Tree-sitter AST node. Re-exported for use across ingestion modules. */
 export type SyntaxNode = Parser.SyntaxNode;
@@ -165,6 +170,21 @@ export const CONTAINER_TYPE_TO_LABEL: Record<string, string> = {
   object_declaration: 'Class',
   companion_object: 'Class',
 };
+
+/** Return the first matching ancestor unless a boundary ancestor is reached first. */
+export function findAncestorBeforeBoundary(
+  node: SyntaxNode,
+  targetTypes: ReadonlySet<string>,
+  boundaryTypes: ReadonlySet<string>,
+): SyntaxNode | null {
+  let current = node.parent;
+  while (current !== null) {
+    if (boundaryTypes.has(current.type)) return null;
+    if (targetTypes.has(current.type)) return current;
+    current = current.parent;
+  }
+  return null;
+}
 
 /**
  * Determine the graph node label from a tree-sitter capture map.
@@ -375,8 +395,13 @@ export const findEnclosingClassInfo = (
         ) {
           label = 'Interface';
         }
+        const templateArguments = extractTemplateArguments(nameNode.text);
+        const classIdName =
+          templateArguments !== undefined
+            ? `${stripTemplateArguments(nameNode.text)}${templateArgumentsIdTag(templateArguments)}`
+            : nameNode.text;
         return {
-          classId: generateId(label, `${filePath}:${nameNode.text}`),
+          classId: generateId(label, `${filePath}:${classIdName}`),
           className: nameNode.text,
         };
       }
@@ -414,10 +439,24 @@ export const findSiblingChild = (
 
 /** Generic name extraction from a function-like AST node.
  *  Tries `node.childForFieldName('name')?.text`, then scans children for
- *  `identifier` / `property_identifier` / `simple_identifier`. */
+ *  `identifier` / `property_identifier` / `simple_identifier`.
+ *
+ *  `arrow_function` and `function_expression` (TS/JS) are inherently
+ *  anonymous — they have no `name` field, and their first identifier
+ *  child is a *parameter*, not a function name. Returning a parameter
+ *  identifier here would synthesize phantom Function IDs (e.g. callers
+ *  walking up from a call inside `arr.map(x => fn(x))` would get
+ *  attributed to a non-existent "Function x"). The language's
+ *  `methodExtractor.extractFunctionName` hook is responsible for naming
+ *  these via parent context (variable_declarator, pair, etc.); when it
+ *  declines, the parent walk should continue rather than fall through
+ *  here. See issue #1166. */
 export const genericFuncName = (node: SyntaxNode): string | null => {
   const nameField = node.childForFieldName?.('name');
   if (nameField) return nameField.text;
+  if (node.type === 'arrow_function' || node.type === 'function_expression') {
+    return null;
+  }
   for (let i = 0; i < node.childCount; i++) {
     const c = node.child(i);
     if (

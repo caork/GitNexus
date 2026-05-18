@@ -61,6 +61,86 @@ export const TYPESCRIPT_QUERIES = `
       name: (identifier) @name
       value: (function_expression)))) @definition.function
 
+; Object-property arrows / function expressions: \`{ addItem: () => ... }\`.
+; The pair's key field carries the meaningful name. Without these patterns,
+; calls inside the arrow are attributed to the file (issue #1166), and the
+; arrow itself is invisible to context() / impact() despite carrying real
+; behaviour (Zustand actions, TanStack queryFn, React Context providers).
+; String-key variant covers \`"add-item": () => ...\`; computed keys
+; (\`[K]: () => ...\`) intentionally fall through anonymous.
+(pair
+  key: (property_identifier) @name
+  value: (arrow_function)) @definition.function
+
+(pair
+  key: (property_identifier) @name
+  value: (function_expression)) @definition.function
+
+(pair
+  key: (string (string_fragment) @name)
+  value: (arrow_function)) @definition.function
+
+(pair
+  key: (string (string_fragment) @name)
+  value: (function_expression)) @definition.function
+
+; HOC-wrapped variable declarations: \`const X = HOC((args) => { ... })\`.
+; Mirrors the registry-primary patterns in \`languages/typescript/query.ts\`
+; so the legacy Call-Resolution DAG and the registry-primary pipeline
+; produce the same set of \`Function\` nodes — required for the CI parity
+; gate. Covers React.forwardRef / memo / useCallback / useMemo / observer
+; / debounce / user-defined HOC factories. The \`var X = HOC(...)\` form is
+; mirrored too (registry-primary has it) so that codebases mixing \`var\` and
+; \`const\` see identical attribution on both pipelines. See
+; \`tsExtractFunctionName\` for the resolution logic and the \`query.ts\`
+; comment for the full anchor-discipline rationale and the chained-
+; array-method trade-off.
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      arguments: (arguments
+        (arrow_function))))) @definition.function
+
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      arguments: (arguments
+        (function_expression))))) @definition.function
+
+(export_statement
+  declaration: (lexical_declaration
+    (variable_declarator
+      name: (identifier) @name
+      value: (call_expression
+        arguments: (arguments
+          (arrow_function)))))) @definition.function
+
+(export_statement
+  declaration: (lexical_declaration
+    (variable_declarator
+      name: (identifier) @name
+      value: (call_expression
+        arguments: (arguments
+          (function_expression)))))) @definition.function
+
+; \`var X = HOC(...)\` parity with registry-primary. Legacy code (and any
+; transpiler output that downlevels \`const\` to \`var\`) hits this shape.
+(variable_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      arguments: (arguments
+        (arrow_function))))) @definition.function
+
+(variable_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      arguments: (arguments
+        (function_expression))))) @definition.function
+
 ; Variable/constant declarations (non-function values).
 ; Overlap with @definition.function patterns is handled by parse-worker dedup.
 (lexical_declaration
@@ -218,6 +298,75 @@ export const JAVASCRIPT_QUERIES = `
     (variable_declarator
       name: (identifier) @name
       value: (function_expression)))) @definition.function
+
+; Object-property arrows / function expressions: \`{ addItem: () => ... }\`.
+; See TYPESCRIPT_QUERIES for rationale (issue #1166).
+(pair
+  key: (property_identifier) @name
+  value: (arrow_function)) @definition.function
+
+(pair
+  key: (property_identifier) @name
+  value: (function_expression)) @definition.function
+
+(pair
+  key: (string (string_fragment) @name)
+  value: (arrow_function)) @definition.function
+
+(pair
+  key: (string (string_fragment) @name)
+  value: (function_expression)) @definition.function
+
+; HOC-wrapped variable declarations: \`const X = HOC((args) => { ... })\`.
+; See TYPESCRIPT_QUERIES section above for the full rationale (issue #1166
+; follow-up — covers forwardRef / memo / useCallback / useMemo / observer
+; / debounce / user-defined HOC factories). Both \`const\` and \`var\` forms
+; are mirrored so JS code that uses \`var\` (or transpiler output) gets the
+; same attribution as the registry-primary path.
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      arguments: (arguments
+        (arrow_function))))) @definition.function
+
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      arguments: (arguments
+        (function_expression))))) @definition.function
+
+(export_statement
+  declaration: (lexical_declaration
+    (variable_declarator
+      name: (identifier) @name
+      value: (call_expression
+        arguments: (arguments
+          (arrow_function)))))) @definition.function
+
+(export_statement
+  declaration: (lexical_declaration
+    (variable_declarator
+      name: (identifier) @name
+      value: (call_expression
+        arguments: (arguments
+          (function_expression)))))) @definition.function
+
+; \`var X = HOC(...)\` parity with registry-primary.
+(variable_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      arguments: (arguments
+        (arrow_function))))) @definition.function
+
+(variable_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      arguments: (arguments
+        (function_expression))))) @definition.function
 
 ; Variable/constant declarations (non-function values).
 ; Overlap with @definition.function patterns is handled by parse-worker dedup.
@@ -531,7 +680,15 @@ export const GO_QUERIES = `
 export const CPP_QUERIES = `
 ; Classes, Structs, Namespaces
 (class_specifier name: (type_identifier) @name) @definition.class
+(class_specifier
+  name: (template_type
+    (type_identifier) @name
+    (template_argument_list) @template-arguments)) @definition.class
 (struct_specifier name: (type_identifier) @name) @definition.struct
+(struct_specifier
+  name: (template_type
+    (type_identifier) @name
+    (template_argument_list) @template-arguments)) @definition.struct
 (namespace_definition name: (namespace_identifier) @name) @definition.namespace
 (enum_specifier name: (type_identifier) @name) @definition.enum
 
@@ -613,6 +770,11 @@ export const CPP_QUERIES = `
 
 ; Templates
 (template_declaration (class_specifier name: (type_identifier) @name)) @definition.template
+(template_declaration
+  (class_specifier
+    name: (template_type
+      (type_identifier) @name
+      (template_argument_list) @template-arguments))) @definition.template
 (template_declaration (function_definition declarator: (function_declarator declarator: (identifier) @name))) @definition.template
 
 ; Includes
@@ -866,6 +1028,16 @@ export const PHP_QUERIES = `
 
 ; ── Heritage: use trait (must capture enclosing class name) ──────────────────
 (class_declaration
+  name: (name) @heritage.class
+  body: (declaration_list
+    (use_declaration
+      [(name) (qualified_name)] @heritage.trait))) @heritage
+
+; ── Heritage: trait uses another trait (transitive trait composition) ────────
+; PHP allows a trait body to contain "use OtherTrait;". The trait-uses-trait
+; IMPLEMENTS edge is required by buildPhpMro to compute the full transitive
+; trait closure (depth 3+ chains).
+(trait_declaration
   name: (name) @heritage.class
   body: (declaration_list
     (use_declaration

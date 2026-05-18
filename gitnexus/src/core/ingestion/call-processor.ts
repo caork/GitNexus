@@ -12,7 +12,7 @@ type ReceiverSource = ReceiverEnriched['receiverSource'];
  * DAG stage 4 fallback: used when `selectDispatch` is absent or returns null.
  * Preserves pre-DAG dispatch semantics:
  *   - 'constructor'         → constructor branch
- *   - 'free'                → free branch (admits Swift/Kotlin class-target fast path)
+ *   - 'free'                → free branch (admits class-target fast path)
  *   - 'member' or undefined → owner-scoped branch
  *
  * `undefined` callForm MUST route through owner-scoped (not free) so bare
@@ -40,13 +40,16 @@ import { getLanguageFromFilename, SupportedLanguages } from 'gitnexus-shared';
 import { isRegistryPrimary } from './registry-primary-flag.js';
 import { isVerboseIngestionEnabled } from './utils/verbose.js';
 import { yieldToEventLoop } from './utils/event-loop.js';
+import { parseSourceSafe } from '../tree-sitter/safe-parse.js';
 import {
+  CLASS_CONTAINER_TYPES,
   FUNCTION_NODE_TYPES,
-  findEnclosingClassId,
   findEnclosingClassInfo,
   genericFuncName,
   inferFunctionLabel,
 } from './utils/ast-helpers.js';
+import type { FieldInfo, FieldExtractorContext } from './field-types.js';
+import type { LanguageProvider } from './language-provider.js';
 import { typeTagForId, constTagForId, buildCollisionGroups } from './utils/method-props.js';
 import type { MethodInfo } from './method-types.js';
 import {
@@ -74,6 +77,63 @@ import { extractTemplateComponents } from './vue-sfc-extractor.js';
 import { extractReturnTypeName, stripNullable } from './type-extractors/shared.js';
 import type { LiteralTypeInferrer } from './type-extractors/types.js';
 import type { SyntaxNode } from './utils/ast-helpers.js';
+
+import { logger } from '../logger.js';
+
+// ── Property-prepass helpers (parity with parse-worker.ts) ──
+// These mirror the sequential-path equivalents in parse-worker.ts so the main-
+// thread `processCalls` pre-pass produces byte-identical Property nodes/symbols
+// to the worker pool. Drift between the two paths breaks the
+// `incremental ≡ --force` invariant the moment a repo crosses the worker
+// threshold between runs.
+
+/** Walk up to the nearest enclosing class/struct/interface AST node. */
+const findEnclosingClassNode = (node: SyntaxNode): SyntaxNode | null => {
+  let current = node.parent;
+  while (current) {
+    if (CLASS_CONTAINER_TYPES.has(current.type)) return current;
+    current = current.parent;
+  }
+  return null;
+};
+
+/** No-op SymbolTable stub for FieldExtractorContext — matches parse-worker. */
+const NOOP_SYMBOL_TABLE: SymbolTableReader = {
+  lookupExact: () => undefined,
+  lookupExactFull: () => undefined,
+  lookupExactAll: () => [],
+  lookupCallableByName: () => [],
+  getFiles: () => [][Symbol.iterator](),
+  getStats: () => ({ fileCount: 0 }),
+};
+
+/**
+ * Extract (and cache) field info for a class node. Cache is passed in so it
+ * stays scoped to a single `processCalls` invocation rather than leaking
+ * across analyze runs (worker uses module-level caching because each worker
+ * process is short-lived; the main thread is not).
+ *
+ * Cache key is `${filePath}:${classNode.startIndex}` — startIndex alone is a
+ * per-file byte offset, so almost every Ruby/Python file's leading class lands
+ * at byte 0 and would collide across files in the shared map.
+ */
+const getFieldInfo = (
+  classNode: SyntaxNode,
+  provider: LanguageProvider,
+  context: FieldExtractorContext,
+  cache: Map<string, Map<string, FieldInfo>>,
+): Map<string, FieldInfo> | undefined => {
+  if (!provider.fieldExtractor) return undefined;
+  const cacheKey = `${context.filePath}:${classNode.startIndex}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+  const result = provider.fieldExtractor.extract(classNode, context);
+  if (!result?.fields?.length) return undefined;
+  const map = new Map<string, FieldInfo>();
+  for (const field of result.fields) map.set(field.name, field);
+  cache.set(cacheKey, map);
+  return map;
+};
 
 /** Per-file resolved type bindings for exported symbols.
  *  Populated during call processing, consumed by Phase 14 re-resolution pass. */
@@ -706,6 +766,15 @@ export const processCalls = async (
   importedRawReturnTypesMap?: ReadonlyMap<string, ReadonlyMap<string, string>>,
   heritageMap?: HeritageMap,
   bindingAccumulator?: BindingAccumulator,
+  /**
+   * Optional cache for compiled `Parser.Query` objects keyed by language name.
+   * When provided, compiled queries are reused across calls instead of being
+   * re-compiled from the query string for every file. Callers that invoke
+   * `processCalls` many times with single-file batches (e.g. the cross-file
+   * propagation phase) should pass a long-lived map here to avoid O(N)
+   * query recompilation overhead.
+   */
+  compiledQueryCache?: Map<SupportedLanguages, Parser.Query>,
 ): Promise<ExtractedHeritage[]> => {
   const parser = await loadParser();
   const collectedHeritage: ExtractedHeritage[] = [];
@@ -714,6 +783,7 @@ export const processCalls = async (
     propertyName: string;
     filePath: string;
     srcId: string;
+    line?: number;
   }[] = [];
   // Phase P cross-file: accumulate heritage across files for cross-file isSubclassOf.
   // Used as a secondary check when per-file parentMap lacks the relationship — helps
@@ -768,9 +838,10 @@ export const processCalls = async (
 
     let tree = astCache.get(file.path);
     if (!tree) {
+      const parseContent = provider.preprocessSource?.(file.content, file.path) ?? file.content;
       try {
-        tree = parser.parse(file.content, undefined, {
-          bufferSize: getTreeSitterBufferSize(file.content.length),
+        tree = parseSourceSafe(parser, parseContent, undefined, {
+          bufferSize: getTreeSitterBufferSize(parseContent),
         });
       } catch (parseError) {
         continue;
@@ -781,10 +852,14 @@ export const processCalls = async (
     let matches;
     try {
       const lang = parser.getLanguage();
-      const query = new Parser.Query(lang, queryStr);
+      let query = compiledQueryCache?.get(language);
+      if (!query) {
+        query = new Parser.Query(lang, queryStr);
+        compiledQueryCache?.set(language, query);
+      }
       matches = query.matches(tree.rootNode);
     } catch (queryError) {
-      console.warn(`Query error for ${file.path}:`, queryError);
+      logger.warn({ queryError }, `Query error for ${file.path}:`);
       continue;
     }
 
@@ -855,6 +930,120 @@ export const processCalls = async (
     }
 
     prepared.push({ file, language, provider, tree, matches, parentMap, typeEnv });
+  }
+
+  // ── Property-registration pre-pass ──
+  // Register all routed properties (e.g. Ruby attr_accessor) BEFORE the
+  // resolution loop so cross-file field-type lookups (e.g.
+  // `user.address.save → Address#save`) succeed regardless of file
+  // processing order. This MUST stay in lockstep with the equivalent
+  // worker-path block in parse-worker.ts (kind === 'properties') — any
+  // divergence between the two paths breaks the `incremental ≡ --force`
+  // invariant once a repo crosses the worker threshold between runs.
+  const fieldInfoCache = new Map<string, Map<string, FieldInfo>>();
+  for (const { file, language, provider, matches, typeEnv } of prepared) {
+    const callRouter = provider.callRouter;
+    if (!callRouter) continue;
+    matches.forEach((match) => {
+      const captureMap: Record<string, any> = {};
+      match.captures.forEach((c) => (captureMap[c.name] = c.node));
+      if (!captureMap['call']) return;
+      const callNameNode = captureMap['call.name'];
+      if (!callNameNode) return;
+      const routed = callRouter(callNameNode.text, captureMap['call']);
+      if (!routed || routed.kind !== 'properties') return;
+
+      const propEnclosingInfo = findEnclosingClassInfo(
+        captureMap['call'],
+        file.path,
+        provider.resolveEnclosingOwner,
+      );
+      const propEnclosingClassId = propEnclosingInfo?.classId ?? null;
+
+      // Enrich routed properties with FieldExtractor metadata so types
+      // discovered from constructor assignments (e.g. `@address = Address.new`)
+      // are propagated even when the routing payload itself lacks declaredType.
+      let routedFieldMap: Map<string, FieldInfo> | undefined;
+      if (provider.fieldExtractor && typeEnv) {
+        const classNode = findEnclosingClassNode(captureMap['call']);
+        if (classNode) {
+          routedFieldMap = getFieldInfo(
+            classNode,
+            provider,
+            {
+              typeEnv,
+              symbolTable: NOOP_SYMBOL_TABLE,
+              filePath: file.path,
+              language,
+            },
+            fieldInfoCache,
+          );
+        }
+      }
+
+      const fileId = generateId('File', file.path);
+      for (const item of routed.items) {
+        const routedFieldInfo = routedFieldMap?.get(item.propName);
+        const propQualifiedName = propEnclosingInfo
+          ? `${propEnclosingInfo.className}.${item.propName}`
+          : item.propName;
+        const nodeId = generateId('Property', `${file.path}:${propQualifiedName}`);
+        graph.addNode({
+          id: nodeId,
+          label: 'Property',
+          properties: {
+            name: item.propName,
+            filePath: file.path,
+            startLine: item.startLine,
+            endLine: item.endLine,
+            language,
+            isExported: true,
+            description: item.accessorType,
+            ...(item.declaredType
+              ? { declaredType: item.declaredType }
+              : routedFieldInfo?.type
+                ? { declaredType: routedFieldInfo.type }
+                : {}),
+            ...(routedFieldInfo?.visibility !== undefined
+              ? { visibility: routedFieldInfo.visibility }
+              : {}),
+            ...(routedFieldInfo?.isStatic !== undefined
+              ? { isStatic: routedFieldInfo.isStatic }
+              : {}),
+            ...(routedFieldInfo?.isReadonly !== undefined
+              ? { isReadonly: routedFieldInfo.isReadonly }
+              : {}),
+          },
+        });
+        ctx.model.symbols.add(file.path, item.propName, nodeId, 'Property', {
+          ...(propEnclosingClassId ? { ownerId: propEnclosingClassId } : {}),
+          ...(item.declaredType
+            ? { declaredType: item.declaredType }
+            : routedFieldInfo?.type
+              ? { declaredType: routedFieldInfo.type }
+              : {}),
+        });
+        const relId = generateId('DEFINES', `${fileId}->${nodeId}`);
+        graph.addRelationship({
+          id: relId,
+          sourceId: fileId,
+          targetId: nodeId,
+          type: 'DEFINES',
+          confidence: 1.0,
+          reason: '',
+        });
+        if (propEnclosingClassId) {
+          graph.addRelationship({
+            id: generateId('HAS_PROPERTY', `${propEnclosingClassId}->${nodeId}`),
+            sourceId: propEnclosingClassId,
+            targetId: nodeId,
+            type: 'HAS_PROPERTY',
+            confidence: 1.0,
+            reason: '',
+          });
+        }
+      }
+    });
   }
 
   // ── Resolution loop: verify constructor bindings and resolve calls ──
@@ -932,7 +1121,13 @@ export const processCalls = async (
           // Defer resolution: Ruby attr_accessor properties are registered during
           // this same loop, so cross-file lookups fail if the declaring file hasn't
           // been processed yet. Collect now, resolve after all files are done.
-          pendingWrites.push({ receiverTypeName, propertyName, filePath: file.path, srcId });
+          pendingWrites.push({
+            receiverTypeName,
+            propertyName,
+            filePath: file.path,
+            srcId,
+            line: captureMap['assignment'].startPosition.row + 1,
+          });
         }
         // Assignment-only capture (no @call sibling): skip the rest of this
         // forEach iteration — this acts as a `continue` in the match loop.
@@ -1052,47 +1247,8 @@ export const processCalls = async (
             return;
 
           case 'properties': {
-            const fileId = generateId('File', file.path);
-            const propEnclosingClassId = findEnclosingClassId(captureMap['call'], file.path);
-            for (const item of routed.items) {
-              const nodeId = generateId('Property', `${file.path}:${item.propName}`);
-              graph.addNode({
-                id: nodeId,
-                label: 'Property',
-                properties: {
-                  name: item.propName,
-                  filePath: file.path,
-                  startLine: item.startLine,
-                  endLine: item.endLine,
-                  language,
-                  isExported: true,
-                  description: item.accessorType,
-                },
-              });
-              ctx.model.symbols.add(file.path, item.propName, nodeId, 'Property', {
-                ...(propEnclosingClassId ? { ownerId: propEnclosingClassId } : {}),
-                ...(item.declaredType ? { declaredType: item.declaredType } : {}),
-              });
-              const relId = generateId('DEFINES', `${fileId}->${nodeId}`);
-              graph.addRelationship({
-                id: relId,
-                sourceId: fileId,
-                targetId: nodeId,
-                type: 'DEFINES',
-                confidence: 1.0,
-                reason: '',
-              });
-              if (propEnclosingClassId) {
-                graph.addRelationship({
-                  id: generateId('HAS_PROPERTY', `${propEnclosingClassId}->${nodeId}`),
-                  sourceId: propEnclosingClassId,
-                  targetId: nodeId,
-                  type: 'HAS_PROPERTY',
-                  confidence: 1.0,
-                  reason: '',
-                });
-              }
-            }
+            // Properties already registered in the pre-pass above.
+            // Skip to avoid duplicate nodes/edges.
             return;
           }
 
@@ -1403,7 +1559,10 @@ export const processCalls = async (
     );
     if (fieldOwner) {
       graph.addRelationship({
-        id: generateId('ACCESSES', `${pw.srcId}:${fieldOwner.nodeId}:write`),
+        id: generateId(
+          'ACCESSES',
+          `${pw.srcId}:${fieldOwner.nodeId}:write${pw.line !== undefined ? `:${pw.line}` : ''}`,
+        ),
         sourceId: pw.srcId,
         targetId: fieldOwner.nodeId,
         type: 'ACCESSES',
@@ -1415,7 +1574,7 @@ export const processCalls = async (
 
   if (skippedByLang && skippedByLang.size > 0) {
     for (const [lang, count] of skippedByLang.entries()) {
-      console.warn(
+      logger.warn(
         `[ingestion] Skipped ${count} ${lang} file(s) in call processing — ${lang} parser not available.`,
       );
     }
@@ -1619,41 +1778,30 @@ const disambiguateByOverloadOrArgTypes = (
   return null;
 };
 
-/**
- * Collapse Swift-extension duplicate Class/Struct candidates to the primary
- * definition, preferring the shortest file path.
- *
- * Swift extensions (`extension User { ... }` in a separate file) create
- * multiple `Class` nodes sharing the same symbol name — one for the primary
- * declaration and one per extension file. When overload disambiguation and
- * receiver narrowing both fail to converge on a single candidate, this
- * heuristic picks the primary definition based on the assumption that it
- * lives at the shortest file path (e.g. `User.swift` over `UserExtensions.swift`).
- *
- * Intentionally narrower than {@link INSTANTIABLE_CLASS_TYPES}: only `Class`
- * and `Struct` are considered, not `Record`. Swift extensions only produce
- * `Class` duplicates in practice, and C#/Kotlin records do not exhibit the
- * same multi-file-definition pattern, so widening this set risks accidental
- * dedup of legitimately distinct record types.
- *
- * Returns a `ResolveResult` when the heuristic fires, `null` when the
- * candidate pool does not match the shape (mixed types, non-Class/Struct
- * kinds, or `length <= 1`). Callers should fall through to their own null
- * return when this helper returns `null`.
- *
- * Used by `resolveFreeCall`. Having a single source of truth prevents
- * duplication if the heuristic is ever tuned.
- */
-const dedupSwiftExtensionCandidates = (
+const orderProviderSameNameTypeCandidates = (
+  candidates: readonly SymbolDefinition[],
+  typeName: string,
+  filePath: string,
+): readonly SymbolDefinition[] | null => {
+  const language = getLanguageFromFilename(filePath);
+  if (language == null) return null;
+  return (
+    getProvider(language).orderSameNameTypeCandidates?.({
+      typeName,
+      callSiteFilePath: filePath,
+      candidates,
+    }) ?? null
+  );
+};
+
+const resolveProviderPrimaryTypeCandidate = (
   candidates: readonly SymbolDefinition[],
   tier: ResolutionTier,
+  typeName: string,
+  filePath: string,
 ): ResolveResult | null => {
-  if (candidates.length <= 1) return null;
-  const allSameType = candidates.every((c) => c.type === candidates[0].type);
-  if (!allSameType) return null;
-  if (candidates[0].type !== 'Class' && candidates[0].type !== 'Struct') return null;
-  const sorted = [...candidates].sort((a, b) => a.filePath.length - b.filePath.length);
-  return toResolveResult(sorted[0], tier);
+  const ordered = orderProviderSameNameTypeCandidates(candidates, typeName, filePath);
+  return ordered && ordered.length > 0 ? toResolveResult(ordered[0], tier) : null;
 };
 
 /**
@@ -2247,6 +2395,35 @@ const resolveMethodByOwner = (
     }
   }
 
+  if (!firstDef && !ambiguous) {
+    const orderedTypeCandidates = orderProviderSameNameTypeCandidates(
+      ctx.model.types.lookupClassByName(receiverTypeName),
+      receiverTypeName,
+      filePath,
+    );
+    if (orderedTypeCandidates) {
+      for (const candidate of orderedTypeCandidates) {
+        const def = canWalkMRO
+          ? lookupMethodByOwnerWithMRO(
+              candidate.nodeId,
+              methodName,
+              heritageMap,
+              ctx.model,
+              mroStrategy,
+              argCount,
+            )
+          : ctx.model.methods.lookupMethodByOwner(candidate.nodeId, methodName, argCount);
+        if (!def) continue;
+        if (!firstDef) {
+          firstDef = def;
+        } else if (def.nodeId !== firstDef.nodeId) {
+          ambiguous = true;
+          break;
+        }
+      }
+    }
+  }
+
   if (!firstDef || ambiguous) return undefined;
   return { def: firstDef, tier: typeResolved.tier };
 };
@@ -2314,9 +2491,9 @@ export const resolveMemberCall = (
  * resolution via `ctx.resolve()`.
  *
  * Used for `foo()`, `doStuff()` — unqualified calls with no receiver.
- * Also handles Swift/Kotlin implicit constructors (`User()` without `new`)
- * by delegating to {@link resolveStaticCall} when the tiered pool contains
- * class-like targets.
+ * Also handles implicit constructors (`User()` without `new`) by delegating
+ * to {@link resolveStaticCall} when the tiered pool contains class-like
+ * targets.
  *
  * {@link resolveCallTarget} delegates here for `callForm === 'free'`.
  *
@@ -2348,33 +2525,30 @@ export const resolveFreeCall = (
 
   let filteredCandidates = filterCallableCandidates(tiered.candidates, argCount, 'free');
 
-  // Class-target fast path: Swift/Kotlin `User()` — free-form call targeting a
-  // class. Delegates to resolveStaticCall for O(1) class + constructor lookup.
+  // Class-target fast path: free-form call targeting a class. Delegates to
+  // resolveStaticCall for O(1) class + constructor lookup.
   // The `.some()` trigger must stay aligned with `INSTANTIABLE_CLASS_TYPES` —
   // any type admitted here that is not in that set will cause resolveStaticCall
   // to return null, wasting two lookup passes per call. `Enum` is deliberately
-  // excluded; `Record` is included so C# records and Kotlin data classes reach
-  // the fast path.
+  // excluded; `Record` is included so record-like class targets reach the fast
+  // path.
   // Align with INSTANTIABLE_CLASS_TYPES by reusing the set directly rather
   // than enumerating literal strings. This converts an invariant that was
   // previously enforced by a comment ("keep this list aligned with
   // INSTANTIABLE_CLASS_TYPES") into one enforced structurally — any future
-  // extension of the set (e.g. Kotlin `object`) propagates here automatically.
-  // The `dedupSwiftExtensionCandidates` helper used in the tail of this
-  // function deliberately uses a narrower literal `'Class' | 'Struct'` check
-  // — Swift extensions only produce Class duplicates in practice, so Record
-  // is excluded there by design. Do not collapse that helper into
-  // INSTANTIABLE_CLASS_TYPES.
+  // extension of the set propagates here automatically.
+  // Language providers can still choose a primary same-name type candidate in
+  // the tail of this function when their grammars index one logical type
+  // multiple times.
   const hasClassTarget =
     filteredCandidates.length === 0 &&
     tiered.candidates.some((c) => INSTANTIABLE_CLASS_TYPES.has(c.type));
   if (hasClassTarget) {
     const staticResult = resolveStaticCall(calledName, filePath, ctx, argCount, tiered);
     if (staticResult) return staticResult;
-    // Retry with constructor form: Swift/Kotlin constructor calls look like
-    // free function calls (no `new` keyword). If resolveStaticCall didn't
-    // match, re-filter with constructor form so CONSTRUCTOR_TARGET_TYPES
-    // applies.
+    // Retry with constructor form for languages whose constructor calls look
+    // like free function calls. If resolveStaticCall didn't match, re-filter
+    // with constructor form so CONSTRUCTOR_TARGET_TYPES applies.
     //
     // The retry fires for every null return from `resolveStaticCall`, which
     // can happen for three distinct reasons — all three are handled below:
@@ -2388,9 +2562,8 @@ export const resolveFreeCall = (
     //   (b) Homonym ambiguity — two or more instantiable class candidates
     //       share the name (e.g. `User` in two files, same tier). The
     //       retry repopulates `filteredCandidates` with both Classes and
-    //       they flow into `dedupSwiftExtensionCandidates` below, which
-    //       either picks the shortest-path primary or null-routes.
-    //       Covered by the R7 Swift-extension dedup test.
+    //       they flow into the provider same-name candidate hook below, which
+    //       can pick a primary definition or null-route.
     //
     //   (c) `resolveStaticCall` step 4 bailed because the tiered pool
     //       contains ownerless `Constructor` nodes (some extractors emit
@@ -2415,10 +2588,13 @@ export const resolveFreeCall = (
   }
 
   if (filteredCandidates.length !== 1) {
-    // See `dedupSwiftExtensionCandidates` — shared helper, single source of
-    // truth for the Swift-extension same-name collision heuristic.
-    const deduped = dedupSwiftExtensionCandidates(filteredCandidates, tiered.tier);
-    if (deduped) return deduped;
+    const primary = resolveProviderPrimaryTypeCandidate(
+      filteredCandidates,
+      tiered.tier,
+      calledName,
+      filePath,
+    );
+    if (primary) return primary;
     return null;
   }
 
@@ -2583,9 +2759,16 @@ export const resolveStaticCall = (
   //     Interface / Trait / Impl). Null-route via the fall-through `return
   //     null` — this is the dominant Codex-fix case.
   //   length === 1 → a single instantiable candidate remains, return it.
-  //   length  >  1 → two or more instantiable classes share the name (e.g.
-  //     homonym classes across files with no import narrowing). Fall through
-  //     to `return null` so the caller null-routes rather than guess.
+  //   length  >  1 → let the call-site provider choose a primary when it can
+  //     prove the candidates are one logical type; otherwise null-route.
+  const primary = resolveProviderPrimaryTypeCandidate(
+    instantiableCandidates,
+    typeResolved.tier,
+    className,
+    currentFile,
+  );
+  if (primary) return primary;
+
   if (instantiableCandidates.length === 1) {
     return toResolveResult(instantiableCandidates[0], typeResolved.tier);
   }
@@ -2976,7 +3159,10 @@ export const processAssignmentsFromExtracted = (
     const fieldOwner = resolveFieldOwnership(receiverTypeName, asn.propertyName, asn.filePath, ctx);
     if (!fieldOwner) continue;
     graph.addRelationship({
-      id: generateId('ACCESSES', `${asn.sourceId}:${fieldOwner.nodeId}:write`),
+      id: generateId(
+        'ACCESSES',
+        `${asn.sourceId}:${fieldOwner.nodeId}:write${asn.line !== undefined ? `:${asn.line}` : ''}`,
+      ),
       sourceId: asn.sourceId,
       targetId: fieldOwner.nodeId,
       type: 'ACCESSES',
@@ -3279,9 +3465,10 @@ export const extractFetchCallsFromFiles = async (
 
     let tree = astCache.get(file.path);
     if (!tree) {
+      const parseContent = provider.preprocessSource?.(file.content, file.path) ?? file.content;
       try {
-        tree = parser.parse(file.content, undefined, {
-          bufferSize: getTreeSitterBufferSize(file.content.length),
+        tree = parseSourceSafe(parser, parseContent, undefined, {
+          bufferSize: getTreeSitterBufferSize(parseContent),
         });
       } catch {
         continue;

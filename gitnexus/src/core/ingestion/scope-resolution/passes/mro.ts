@@ -24,6 +24,7 @@ import type { KnowledgeGraph } from '../../../graph/types.js';
 import type { GraphNodeLookup } from '../graph-bridge/node-lookup.js';
 import type { LinearizeStrategy } from '../contract/scope-resolver.js';
 import { resolveDefGraphId } from '../graph-bridge/ids.js';
+import { isClassLike } from '../scope/walkers.js';
 
 /**
  * Build an MRO map keyed by scope-resolution Class `DefId`.
@@ -58,7 +59,7 @@ export function buildMro(
   const defIdByGraphId = new Map<string, string>();
   for (const parsed of parsedFiles) {
     for (const def of parsed.localDefs) {
-      if (def.type !== 'Class') continue;
+      if (!isClassLike(def.type)) continue;
       const graphId = resolveDefGraphId(parsed.filePath, def, nodeLookup);
       if (graphId !== undefined) defIdByGraphId.set(graphId, def.nodeId);
     }
@@ -97,8 +98,9 @@ export const defaultLinearize: LinearizeStrategy = (_classDefId, directParents, 
   const ancestors: string[] = [];
   const visited = new Set<string>();
   const queue: string[] = [...directParents];
-  while (queue.length > 0) {
-    const cur = queue.shift()!;
+  for (;;) {
+    const cur = queue.shift();
+    if (cur === undefined) break;
     if (visited.has(cur)) continue;
     visited.add(cur);
     ancestors.push(cur);

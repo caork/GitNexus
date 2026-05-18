@@ -337,5 +337,5 @@ export const ascendCProvider = defineLanguage({
   heritageExtractor: createHeritageExtractor(SupportedLanguages.AscendC),
   labelOverride: ascendCLabelOverride,
   builtInNames: ASCEND_C_BUILT_INS,
-  sourcePreprocessor: preprocessAscendC,
+  preprocessSource: preprocessAscendC,
 });

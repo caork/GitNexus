@@ -4,9 +4,194 @@ All notable changes to GitNexus will be documented in this file.
 
 ## [Unreleased]
 
-### Performance
+## [1.6.5] - 2026-05-16
 
-- **`analyze` ~33% faster** — moved FTS index creation from the analyze pipeline to first-use lazy initialisation. The 5 `CREATE_FTS_INDEX` calls cost ~440 ms each in LadybugDB regardless of table size (≈2 s fixed overhead) and dominated runtime on small repos and slow CI runners. The cost now amortises across the first `query`/`context` call in a session via a new `ensureFTSIndex` helper. Mini-repo `analyze` measured locally on Windows: 6.4 s → 4.0 s warm; on CI Windows runners (≈3× slower) restores comfortable headroom against the 30 s e2e test budget.
+### Added
+
+- **C++ ADL V2** — Argument-Dependent Lookup overhaul. Class-typed reference args (incl. rvalue refs) contribute associated namespaces (#1595); class-pointer args and template-specialization args (with nested template args) included (#1592, #1596); base-class associated namespaces walked via MRO (#1597); free-function reference args contribute enclosing namespace (#1598); ordinary and ADL free-call candidates merged before overload selection (#1599)
+- **C++ standard-conversion-sequence ranking** for overload resolution (#1606)
+- **C++ scope-resolution migration** — C++ now runs on the registry-primary RFC #909 path (#938, #1520); template-body `this->` + `using ns::name` calls resolved in the scope resolver (#1590); template specializations disambiguated in class graph IDs and receiver routing (#1587); EXTENDS edges for template and qualified template bases (#1581)
+- **PHP scope-resolution migration** — PHP moved to scope-based resolution (#938, #1497, supersedes #1124)
+- **Java scope-resolution migration** — RFC #909 Ring 3 (#1482)
+- **C scope-resolution migration** — RFC #909 Ring 3 (#1481)
+- **Incremental indexing** — `gitnexus analyze` now reuses a parse cache, writes back to DB, and short-circuits scope resolution when nothing changed (#1479)
+- **`gitnexus:keep` marker** — preserves custom context sections (#605, #1508)
+- **`gitnexus analyze --skip-skills` and `--index-only`** flags (#742, #1485)
+- **`gitnexus wiki --timeout` and `--retries` flags** — mitigate timeout aborts on large module pages (#1543)
+- **HTTP embedding `dimensions` parameter** — now forwarded to the embedding endpoint (#1498)
+- **Cursor 2.4 `postToolUse` hooks** — upgraded for Read/Grep/Shell coverage (#1467)
+
+### Fixed
+
+- **Cross-file type propagation** — resolved a stall on large repos (#1626)
+- **C++ inline-namespace ambiguity** — detect same-name ambiguity across inline namespace children (#1564, #1600); workspace-wide dependent-base name resolution for cross-file templates (#1586)
+- **Parse cache persistence** — sharded on large repos to avoid corruption (#1580)
+- **TypeScript ESM `.js` extension** — fallback applied to tsconfig path-alias resolution (#1530) and `.js` → `.ts` source resolution (#1525)
+- **Markdown CRLF line endings** — section heading parser now handles them (#1469)
+- **`gitnexus analyze --no-stats`** — actually omits volatile counts (#1477, #1478)
+- **`ensureGitNexusIgnored`** — tolerate read-only workspaces (#1549, #1550)
+- **Claude augment hook** — skipped when GitNexus server owns the DB (#1493)
+- **Docker runtime image** — symlink `gitnexus` binary onto `$PATH` (#1551); install `ca-certificates` for TLS verification (#1545, #1547); include duckdb installer script (#1502)
+- **Windows reliability** — fix 32767-char tree-sitter crash and VECTOR-extension SIGSEGV (#1433); platform-aware `tsc` build command for win32 (#1531)
+- **Search / FTS** — guard against undefined `bm25Results` when FTS is unavailable (#1489, #1540); CONTAINS fallback in augment when FTS indexes unavailable (#1476)
+- **Wiki** — sanitize generated mermaid diagrams (#1539)
+- **Hooks** — cap concurrent augment subprocesses to prevent runaway fan-out (#1486, #1510)
+- **LadybugDB** — drain checkpoint result before close (#1506); recover `gitnexus analyze` from orphan sidecars when the main DB file is missing (#1622)
+- **Group / contracts** — detect `httpx` async consumers (#1408)
+- **Server hardening** — sanitize repo name to prevent argument injection on `/api/analyze` (#1305)
+
+### Changed
+
+- **CI release pipeline unified under `publish.yml`** — single source of truth for npm publish, provenance, and GitHub Release creation (#1610)
+- **CI: skip RC build on release PRs** — release/* branches no longer cut redundant RCs (#1474)
+- **CI (Claude review): make `/review` reliably post PR comments** (#1522); allow Bash in code-review job without interactive approval (#1523)
+- **CI publish (post-merge fixes)** — bump publish job to Node 24 for npm OIDC support (#1628); engage npm Trusted Publishing OIDC properly (#1627)
+- **Tests** — remove flaky regression test for resource exhaustion (#1521); de-flake regex linearity assertions in U8 (#1475)
+
+### Chore / Dependencies
+
+- `vitest` 4.1.5 → 4.1.6 in /gitnexus (#1605)
+- `@langchain/google-genai` bump in /gitnexus-web (#1554)
+- `vite` 8.0.10 → 8.0.11 in /gitnexus-web (#1555)
+- `mermaid` bump (#1514)
+- `protobufjs` 7.5.5 → 7.5.8 + `@protobufjs/utf8` in /gitnexus (#1535, #1536)
+- `urllib3` bump in /eval uv group (#1512)
+- GitHub Actions: `sigstore/cosign-installer` 4.1.1 → 4.1.2 (#1557)
+
+## [1.6.4] - 2026-05-10
+
+### Added
+
+- **`gitnexus publish`** — opt-in command to push your indexed graph to the understand-quickly registry for shareable browsing (#1425)
+- **`IncludeExtractor` for C++** — cross-repo include tracking joins the group contract pipeline (#1156)
+- **Unreal Engine C++ support** — strips reflection macros (`UCLASS`, `UFUNCTION`, `UPROPERTY`, etc.) before tree-sitter parses, so UE projects index cleanly (#1439)
+- **Thrift contracts extractor** — group-mode contract detection for Apache Thrift IDL (#1234)
+- **Workspace extractors for Node, Python, Go, Java, Elixir** — group-mode auto-discovery of cross-package boundaries (#1260)
+- **Rust workspace cross-crate contracts** — auto-discovery of `[workspace]` member crates and their cross-crate links (#1256)
+- **Go scope-resolution hooks** — Go joins Python / C# / TypeScript on the registry-primary RFC #909 path (#1302)
+- **TypeScript registry-primary scope resolution (Ring 3)** — TypeScript fully migrated to scope-based resolution (#1050)
+- **Configurable group cross-link path exclusions** — reduces false-positive contract links in vendored / monorepo trees (#1093)
+- **MCP tool safety annotations** — every MCP tool advertises read-only / mutating semantics so hosts can prompt appropriately (#1127)
+- **`--embeddings <limit>` opt-in cap** — bound the embeddings pass on huge graphs (closes #382, #1375)
+- **Pino structured logger** — replaces ad-hoc console output across the core with structured JSON logs (with pretty-print for TTY) (#1336)
+- **Shared resilient-fetch helper** — single retries + circuit breaker module reused by HF / Docker / publish flows (#1448)
+- **`/autofix` ChatOps button** — fork-safe PR autofix pipeline replaces the inline reviewdog flow (#1446, #1458)
+- **Automated security & vulnerability scans** in CI (#1297, #1455)
+
+### Fixed
+
+- **FTS read-only DB cluster** — hook resolves canonical repo root and guards read-only FTS ensure; missing-FTS warning is now surfaced. Closes #1255, #1287, #1170, #1449, #1440, #1216, #1438 (#1226, #1418, #1107, #1123)
+- **WAL corruption recovery** — quarantine corrupted `.wal` files instead of failing analyze; CHECKPOINT before close prevents recurrence; `safeClose` consolidates flush. Closes #1402, #1236, #1273, #1361 (#1417, #1314, #1377)
+- **Embedding download failures** — actionable HF_ENDPOINT guidance, retries, timeout, and circuit breaker; bridge `HF_ENDPOINT` to transformers.js; iterative DFS; HF cache via `os.homedir()`. Closes #1378, #1437, #1205 (#1419, #1252, #1078)
+- **Windows reliability** — pin tree-sitter-c/cpp to fix segfault, prefer `.cmd`/`.bat` from `where` output, robust LadybugDB lock acquisition for CI integration tests, surface silent finalize-skips so analyze cannot exit 0 without persisting. Closes #1242, #1427, #1447, #1468, #1400; partial #1218 (#1243, #1299, #1430, #1237, #1226, #1235)
+- **DuckDB / LadybugDB native** — bumped to 0.16.0 then 0.16.1; prevent extension install hangs; CHECKPOINT before close; WAL quarantine on corruption. Closes #1162, #1160, #273 (#1235, #1326, #1129, #1314, #1417)
+- **C# scope-resolution "Cannot add property" crashes** — generic typed properties included in context and impact, fixing crashes on Unity ECS partial structs and on properties whose name matches the class name. Closes #1426, #1465 (#1399)
+- **C# frozen-bucket regression** + scope-resolution I8 hardening — closes #1066 (#1082, #1085)
+- **Scope resolution** — same-range Module-as-parent for top-level scopes (closes #1086) (#1087); avoid variadic reference-site aggregation (#1112); skip empty scope extraction (#1100); classify Python class methods as Method (#1102)
+- **Python** — index repos with empty `__init__.py` and >32 KB files (#1163); walk ancestors for multi-segment dotted imports (#1241); deterministic multi-segment suffix fallback (#1253)
+- **TypeScript** — capture missed CALLS edges from HOF callbacks and JSX (#1175); name HOC-wrapped const declarations (`forwardRef` / `memo` / `useCallback` / `useMemo` / `observer`) (#1261); pair-with-arrow `@declaration.function` anchored on inner arrow
+- **Go** — loose equality for `Array.find()` null checks (#1384)
+- **Swift** — switched to the official prebuilt parser runtime (#1130)
+- **Server hardening cluster (U2–U8)** — JS path-injection on `/api/file` + docker-server (U2, #1322); git-clone path/CLI-injection / ReDoS hardening (U3, #1325); per-route rate limiting on FS-touching endpoints (U4, #1327); URL/regex/tag-filter sanitization (U7, #1330); ReDoS in cobol-preprocessor + rust-workspace + cross-impact resource exhaustion (U8, #1331); critical type-confusion + validation helper (#1317); rate-limit `/api/analyze` and `/api/embed` (closes #1328, #1339); IPv6 ipKeyGenerator (closes #1360, #1374); IPv4-compatible IPv6 / NAT64 SSRF bypasses in `validateGitUrl` (closes #1148, 95814847); predictable tempfile names → `crypto.randomBytes` (#1387); log-injection / http-to-file-access / client-side request forgery (#1456); pin Docker Node base images + Trivy verification + Dependabot policy (#1455)
+- **Group / contracts** — `runExactMatch` honours `.gitnexusignore` via shared `IgnoreService` (closes #1185, #1247); custom manifest links resolved against graph symbols (#1254); `IgnoreService` EACCES test under uid=0 (#1108)
+- **MCP** — close MCP server timeout via stdout discipline + cold-start friction (#1383); avoid `git` from non-repo cwd in sibling-cwd match (closes #1138, #1293); start MCP bridge correctly when using `npx` (#1114); project `tool_map` flows from handlers (#1113); parallelize staleness checks in `list_repos` (#1416)
+- **Storage / CLI** — derive registry name from canonical repo root, not worktree slug (closes #1259, #1296); `--skip-git` treats cwd as index root (#1245); keep GitNexus ignores inside `.gitnexus/` (#1248); surface silent finalize-skips so `analyze` cannot exit 0 without persisting (closes #1169, #1237); ignore global registry during staleness checks (#1141); use `os.homedir()` instead of `process.env.HOME` for HF cache dir (#1078); correct OpenCode skills install path in status message (#1386)
+- **Docker / server** — dedicated health endpoint for container healthcheck (closes #1147, #1355); HEAD probe so SSE heartbeat doesn't time out healthcheck (#1182); flush WAL after `/api/embed` so search sees new embeddings (closes #1149, #1359); platform-aware semantic fallback (#1150); skip vector index query on unsupported platforms (closes #1178, #1181); serve web UI at root path instead of 404 (#1048)
+- **Worker pool** — wait for replacement worker online before dispatch (#1324); prevent premature pool resolution in worker split-and-retry path (#1321); recover worker parse stalls (#1121); widened CI flake-tolerant timeouts (#1323, #1347, #1354)
+- **Embeddings storage** — CHECKPOINT before closing DB to prevent WAL corruption (#1314)
+- **Performance** — replace O(n³) C3 merge loop with O(n²) head-pointer algorithm (#1316)
+- **Install** — vendor tree-sitter-dart source (#1125)
+- **Git utils** — suppress stderr leak in `getCurrentCommit` and `getGitRoot` (closes #1172, #1341)
+- **Search** — load FTS during core DB init (#1123); create FTS indexes during `analyze` (#1107); surface warning when FTS indexes are missing (#1418)
+- **Hooks** — clarify `PostToolUse` hook is notification-only, not auto-reindex (#1070)
+- **Docs** — README Web UI section corrected (closes #1110, #1159, #2ff3e64f); Goliath capitalisation typo (#1126)
+- **CI** — fork-safe PR autofix pipeline (#1446); consolidated Claude review workflow (#1258); fine-grained PAT for RC tag push (#1407); handle expired artifacts in base coverage fetch (#1410, #1412); allow expected legacy parity failures (#1099); avoid duplicate main push checks; isolate native LadybugDB / CLI e2e flakes; seed e2e with a small fixture repo (#1249); configure e2e GitNexus home at runtime; widen rate-limit test window for Windows CI (#1347)
+
+### Changed
+
+- **`gitnexus publish` artefact contract** — universal opt-in publish format introduced (#1425, #1458)
+- **Refactor: per-language patterns consolidated into `LanguageProvider`** (#1279)
+- **Refactor: `safeClose` helper** consolidates WAL flush across LadybugDB call sites (#1377)
+- **Quality: exclude `test/fixtures` from CodeQL, ESLint, and Prettier** (#1313)
+- **Regression coverage** for `.gitnexusignore` behaviour with `--skip-git` (#1450)
+
+### Chore / Dependencies
+
+- `@ladybugdb/core` 0.16.0 → 0.16.1 (#1235, #1326)
+- `@anthropic-ai/sdk` (#1442), `@langchain/anthropic` (#1389), `@langchain/core` (#1394), `@langchain/openai` (#1215)
+- `hono` 4.12.9 → 4.12.18 + `@hono/node-server` (#1310, #1311, #1443)
+- `axios` (#1345), `fast-uri` 3.1.0 → 3.1.2 (#1441), `lru-cache` 11.3.5 → 11.3.6 (#1344), `mnemonist` 0.40.3 → 0.40.4 (#1239), `express-rate-limit` (#1343, #1397), `onnxruntime-node` (#1213, #1435), `uuid` 13 → 14 in /gitnexus-web (#1211, after revert #1222 / re-land #1250 + #1208)
+- `react`/`@types/react` (#1210), `react-dom` 19.2.5 → 19.2.6 (#1396), `react-zoom-pan-pinch` (#1214), `jsdom` 29.0.2 → 29.1.1 (#1395)
+- npm_and_yarn group bump (#1312), uv group bump (#1315), `python-dotenv` (#1320), `@types/node` (#1212, #1421, #1436)
+- GitHub Actions: `docker/build-push-action` 6.19.2 → 7.1.0 (#1391), `github/codeql-action` 3.35.3 → 4.35.3 (#1390)
+
+## [1.6.3] - 2026-04-24
+
+### Added
+
+- **Cross-repo impact analysis** — `@repo` MCP routing plus group resources let impact queries span multiple indexed repositories in a group (#794, #984)
+- **Python scope-based call resolution** — registry-primary flip, performance, and generalization work from RFC #909 Ring 3 (#980)
+- **C# scope-resolution migration** — C# now runs on the registry-primary path alongside Python (#934, #1019)
+- **RFC #909 Ring 1 & Ring 2 scope-resolution infrastructure** — the shared foundation for language-agnostic scope resolution:
+  - Scope-resolution types and constants, `LanguageProvider` hook extension (#910, #911, #949, #950)
+  - `ScopeTree` + `PositionIndex` + `makeScopeId` (#912, #961)
+  - `DefIndex` / `ModuleScopeIndex` / `QualifiedNameIndex` (#913, #958)
+  - `MethodDispatchIndex` materialized view over `HeritageMap` (#914, #960)
+  - `resolveTypeRef` strict single-return type resolver (#916, #959)
+  - SCC-aware finalize with bounded fixpoint (#915, #962)
+  - `ClassRegistry` / `MethodRegistry` / `FieldRegistry` + 7-step lookup (#917, #963)
+  - Shadow-mode diff + aggregate, parity harness + static dashboard (#918, #923, #951, #972)
+  - `ScopeExtractor` driver with 5-pass CaptureMatch → ParsedFile (#919, #965)
+  - `ScopeExtractor` wired into parse-worker + processor (#920, #969)
+  - `finalize-orchestrator` materializes `ScopeResolutionIndexes` (#921, #970)
+  - Per-language `resolveImportTarget` adapter (#922, #971)
+  - `REGISTRY_PRIMARY_<LANG>` per-language flag reader (#924, #968)
+  - `emit-references` drains `ReferenceIndex` to graph edges (#925, #973)
+- **`gitnexus analyze --name <alias>`** with duplicate-name guard in the repo registry (#955)
+- **`gitnexus remove <target>`** unindexes a registered repo by name or path (#664, #1003)
+- **Auto-infer registry name** from `git remote.origin.url` when `--name` is omitted (#981)
+- **Sibling-clone drift detection** — indexed repos are fingerprinted by remote URL so duplicate registrations are caught before graph divergence (#982)
+- **Configurable large-file skip threshold** — the walker's 512 KB default is now overridable via `GITNEXUS_MAX_FILE_SIZE` (KB) or `gitnexus analyze --max-file-size <kb>`. Values are clamped to the 32 MB tree-sitter ceiling, invalid inputs fall back to the default with a one-time warning, and the CLI banner reports the effective post-clamp threshold when an override is active (#991, #1044, #1045)
+- **`GITNEXUS_INDEX_TEST_DIRS` opt-in** for `__tests__` / `__mocks__` traversal (#771, #1046)
+- **`analyze` embedding preservation** — existing embeddings are preserved by default, `--force` regenerates them, `--drop-embeddings` opts out entirely (CLI + HTTP API) (#1055)
+- **Structural embedding chunking** with data-driven `CHUNKING_RULES` dispatch, replacing the flat line-based split (#987)
+- **PHP HTTP consumer detection** for the extractor catalogue (#993)
+- **Per-phase search timing** instrumentation across the query pipeline (#953)
+- **MCP disambiguation ranking** — `context` / `impact` candidates are ranked and expose `kind` / `file_path` hints (#888)
+- **Docker images for UI + CLI/server** shipped via `docker-compose` with cosign signing (#967), RC image builds (#978), and GHCR → Docker Hub mirroring (#1029)
+
+### Fixed
+
+- **Go CALLS edges for receiver methods** — worker source IDs now align with the main pipeline, restoring receiver-method call edges (#1043)
+- **Node 22 DEP0151 warning** from `tree-sitter-c-sharp` import silenced (#1013, #1049)
+- **FTS index bootstrap** tries a local `LOAD` before `INSTALL` so offline/air-gapped runs no longer fail on network errors (#726)
+- **FTS ensure failures** are no longer cached and are invalidated on pool teardown (#1006)
+- **`groupImpact` local-impact errors** now bubble to the caller instead of being swallowed (#1004, #1007)
+- **Friendly error** when a group name is not found, with regression test for #903 (#989)
+- **`bm25` results** return FTS-matched symbols instead of an arbitrary `LIMIT 3` slice (#806)
+- **Embedding AST traversal** switched from recursion to iterative DFS, fixing stack overflow on deeply nested files (#990)
+- **React component path detection** runs before lowercasing, so mixed-case `.jsx`/`.tsx` files are recognised (#260)
+- **`detect-changes` ENOBUFS** by setting `maxBuffer` on `git` / `rg` `execFileSync` invocations (#957)
+- **`detect-changes` in direct CLI** — command was wired to MCP only; now exposed on the CLI as well (#892)
+- **CLI gitnexus markers** — `<!-- gitnexus:* -->` is only matched at section position, no longer inside code/prose (#1041, #1042)
+- **`opencode.json` setup** preserves existing comments and config during install (#998)
+- **Sequential parser logging** — skipped languages are now logged instead of silently dropped (#1021)
+- **`cli-e2e` fixture isolation** from the shared mini-repo, plus stabilised `rel-csv-split` stream teardown on Windows via `expect.poll` (#954, #1052)
+- **Docker** — RC build guarded against empty `vtag`, `inputs.tag` used to detect `workflow_call` context, web builder stage now copies `gitnexus/package.json`, base image switched from alpine to debian (#983, #996, #997, #1014)
+- **CI** — reusable `docker.yml` now inherits secrets from `release-candidate.yml` (#1054)
+
+### Changed
+
+- **`setup` config I/O unified** on `mergeJsoncFile` across all writers (#1031)
+- **Docker CI** gains a retry wrapper for `build-push` with visibility and hardened shell
+
+### Chore / Dependencies
+
+- Dependency bumps: `graphology` 0.25.4 → 0.26.0 (#1001), `uuid` 13 → 14 (#1000), `@huggingface/transformers` (#1035), `@types/node` (#1002), `@types/uuid` (#1016), `vitest` 4.1.4 → 4.1.5 (#1017), `@vitest/coverage-v8` (#1018)
+- gitnexus-web dependency bumps: `vite` 5.4.21 → 6.4.2 → 7.3.2 → 8.0.10 + `vitest` 4 (#1061, #1062, #1063), `lucide-react` 0.562.0 → 1.11.0 with local GitHub SVG fallback (#1038), `@langchain/anthropic` 1.3.10 → 1.3.27 (#1039), `@babel/types` (#1037)
+- gitnexus-shared dependency bumps: `typescript` (#1034)
+- GitHub Actions bumps: `actions/setup-node` 6.3.0 → 6.4.0 (#1033)
+- Documentation: repo-wide `DoD.md` Definition of Done (#1032), gRPC microservices group guide (#906, #994), `group add` / `group remove` README fixes (#1020), CLI docs include `--skip-git` (#750), README Discord link updated
 
 ## [1.6.2] - 2026-04-18
 

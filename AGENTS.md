@@ -1,7 +1,7 @@
-<!-- version: 1.6.0 -->
-<!-- Last updated: 2026-04-20 -->
+<!-- version: 1.7.0 -->
+<!-- Last updated: 2026-04-23 -->
 
-Last reviewed: 2026-04-20
+Last reviewed: 2026-04-23
 
 **Project:** GitNexus · **Environment:** dev · **Maintainer:** repository maintainers (see GitHub)
 
@@ -40,7 +40,7 @@ Commands and gotchas live under **Repo reference** below and in **[CONTRIBUTING.
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)**, **[CONTRIBUTING.md](CONTRIBUTING.md)**, **[GUARDRAILS.md](GUARDRAILS.md)**
 - **Call-resolution DAG (legacy path):** See ARCHITECTURE.md § Call-Resolution DAG. Typed 6-stage DAG inside the `parse` phase; language-specific behavior behind `inferImplicitReceiver` / `selectDispatch` hooks on `LanguageProvider`. Shared code in `gitnexus/src/core/ingestion/` must not name languages. Types: `gitnexus/src/core/ingestion/call-types.ts`.
-- **Scope-resolution pipeline (RFC #909 Ring 3):** See ARCHITECTURE.md § Scope-Resolution Pipeline. Replaces the legacy DAG for languages in `MIGRATED_LANGUAGES` (currently Python). A language plugs in by implementing `ScopeResolver` (`scope-resolution/contract/scope-resolver.ts`) and registering it in `SCOPE_RESOLVERS`. CI parity gate runs BOTH paths per migrated language on every PR.
+- **Scope-resolution pipeline (RFC #909 Ring 3):** See ARCHITECTURE.md § Scope-Resolution Pipeline. Replaces the legacy DAG for languages in `MIGRATED_LANGUAGES` (see `registry-primary-flag.ts`). A language plugs in by implementing `ScopeResolver` (`scope-resolution/contract/scope-resolver.ts`) and registering it in `SCOPE_RESOLVERS`. CI parity gate runs BOTH paths per migrated language on every PR.
 - **Cursor:** `.cursor/index.mdc` (always-on); `.cursor/rules/*.mdc` (glob-scoped). Legacy `.cursorrules` deprecated.
 - **GitNexus:** skills in `.claude/skills/gitnexus/`; MCP rules in `gitnexus:start` block below.
 
@@ -48,6 +48,7 @@ Commands and gotchas live under **Repo reference** below and in **[CONTRIBUTING.
 
 | Date | Version | Change |
 |------|---------|--------|
+| 2026-04-23 | 1.7.0 | TypeScript added to `MIGRATED_LANGUAGES` (registry-primary call resolution by default). |
 | 2026-04-20 | 1.6.0 | Added scope-resolution pipeline pointer (RFC #909 Ring 3); Python migrated to registry-primary. |
 | 2026-04-19 | 1.5.0 | Cross-repo impact (#794): `impact`/`query`/`context` accept `repo: "@<group>"` + `service`. Removed `group_query`/`group_contracts`/`group_status` MCP tools; added `gitnexus://group/{name}/contracts` and `gitnexus://group/{name}/status` resources. |
 | 2026-04-16 | 1.4.0 | Fixed: web UI description, pre-commit behavior, MCP tools (7->16), added gitnexus-shared, removed stale vite-plugin-wasm gotcha. |
@@ -61,25 +62,38 @@ Commands and gotchas live under **Repo reference** below and in **[CONTRIBUTING.
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **GitNexus** (17923 symbols, 25121 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+Indexed as **GitNexus** (4325 symbols, 10556 relationships, 300 execution flows). Use MCP tools to understand code, assess impact, and navigate safely.
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
+> If any tool warns the index is stale, run `npx gitnexus analyze` first.
 
 ## Always Do
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
+- **MUST run impact analysis before editing any symbol.** `gitnexus_impact({target: "symbolName", direction: "upstream"})` — report blast radius to the user.
+- **MUST run `gitnexus_detect_changes()` before committing** — verify only expected symbols and flows are affected.
+- **MUST warn the user** if impact returns HIGH or CRITICAL risk.
+- Explore unfamiliar code with `gitnexus_query({query: "concept"})` (process-grouped, ranked) instead of grepping.
+- Full context on a symbol: `gitnexus_context({name: "symbolName"})`.
+
+## When Debugging
+
+1. `gitnexus_query({query: "<error or symptom>"})` — find related execution flows
+2. `gitnexus_context({name: "<suspect function>"})` — callers, callees, process participation
+3. `READ gitnexus://repo/GitNexus/process/{processName}` — trace flow step by step
+4. Regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})`
+
+## When Refactoring
+
+- **Rename:** `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` first. Graph edits are safe; text_search edits need manual review.
+- **Extract/Split:** `gitnexus_context` (incoming/outgoing refs) then `gitnexus_impact` (upstream callers) before moving code.
+- **After any refactor:** `gitnexus_detect_changes({scope: "all"})` to verify scope.
 
 ## Never Do
 
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
-- NEVER add language-specific behavior to shared ingestion code (`gitnexus/src/core/ingestion/`) — use a `LanguageProvider` hook. Seeing `provider.mroStrategy === 'xxx'` or an import from `languages/xxx.ts` in shared code means stop and add a hook.
+- Edit a symbol without running `gitnexus_impact` first.
+- Ignore HIGH/CRITICAL risk warnings.
+- Rename with find-and-replace — use `gitnexus_rename`.
+- Commit without `gitnexus_detect_changes()`.
+- Add language-specific behavior to shared ingestion code (`gitnexus/src/core/ingestion/`) — use a `LanguageProvider` hook. Seeing `provider.mroStrategy === 'xxx'` or an import from `languages/xxx.ts` in shared code means stop and add a hook.
 
 ## Tools Quick Reference
 
@@ -118,21 +132,61 @@ This project is indexed by GitNexus as **GitNexus** (17923 symbols, 25121 relati
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/GitNexus/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/GitNexus/context` | Codebase overview, index freshness |
 | `gitnexus://repo/GitNexus/clusters` | All functional areas |
 | `gitnexus://repo/GitNexus/processes` | All execution flows |
 | `gitnexus://repo/GitNexus/process/{name}` | Step-by-step execution trace |
+| `gitnexus://group/{name}/contracts` | Group Contract Registry (provider/consumer rows + cross-links) |
+| `gitnexus://group/{name}/status` | Per-member index + Contract Registry staleness report |
 
-## CLI
+## Self-Check Before Finishing
 
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+1. `gitnexus_impact` was run for all modified symbols
+2. No HIGH/CRITICAL warnings were ignored
+3. `gitnexus_detect_changes()` confirms expected scope
+4. All d=1 dependents were updated
+
+## Keeping the Index Fresh
+
+```bash
+npx gitnexus analyze                 # incremental by default; preserves embeddings
+npx gitnexus analyze --force         # full rebuild from scratch (opt out of incremental)
+npx gitnexus analyze --embeddings    # also generate embeddings for new/changed nodes
+npx gitnexus analyze --drop-embeddings  # explicit opt-in to wipe existing embeddings
+```
+
+`analyze` runs **incrementally by default**. The pipeline still parses every file every run (cross-file resolution requires it), but tree-sitter parsing is **served from a content-addressed cache** under `.gitnexus/parse-cache/` (per-chunk JSON shards plus `index.json`) for chunks whose file contents haven't changed since the last run. Older installs may still have a legacy single file `.gitnexus/parse-cache.json`, which is read for backward compatibility but no longer written. Only changed-file rows (and their importers) are rewritten in LadybugDB; unchanged-file rows are preserved. Output is byte-equivalent to a full rebuild. Pass `--force` to wipe and re-index from scratch (e.g., to recover from a corrupt index, or after upgrading GitNexus).
+
+The parse cache key is **content-addressed and version-tagged**: it survives `--force` runs, and is automatically invalidated by a `gitnexus` package upgrade (so a new tree-sitter grammar doesn't silently replay stale parse output). Safe to delete the whole `.gitnexus/parse-cache/` directory (and remove any legacy `.gitnexus/parse-cache.json` if present) at any time — it'll be rebuilt on the next analyze.
+
+Check `.gitnexus/meta.json` `stats.embeddings` (0 = none). A plain `analyze` no longer drops existing vectors — pass `--drop-embeddings` to wipe.
+
+> Claude Code: PostToolUse hook detects a stale index after `git commit` and `git merge` and prompts the agent to run `analyze`. The hook does not invoke `analyze` itself.
+
+## CLI Skills
+
+| Task | Skill file |
+|------|-----------|
+| Architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Debugging / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Refactoring | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools/resources/schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| CLI commands (index, status, clean, wiki) | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+
+## Hook env knobs
+
+The Claude Code hook (`gitnexus/hooks/claude/gitnexus-hook.cjs` and the mirrored plugin copy under `gitnexus-claude-plugin/hooks/`) honours these env vars. Defaults work for normal installations; set them only to override resolution. All path overrides ignore values that do not exist on disk and fall through to the standard resolution chain.
+
+| Env var | Type | Default | Purpose |
+|---------|------|---------|---------|
+| `GITNEXUS_HOOK_CLI_PATH` | path | resolved via package layout / `require.resolve` | Override path to the `gitnexus` CLI entry the hook spawns for `augment`. |
+| `GITNEXUS_HOOK_LSOF_PATH` | path | `lsof` on `PATH` (with `/usr/bin/lsof`, `/usr/sbin/lsof`, `/sbin/lsof` fallbacks) | Override POSIX `lsof` location for the DB-lock probe. |
+| `GITNEXUS_HOOK_PS_PATH` | path | `ps` on `PATH` (with `/bin/ps`, `/usr/bin/ps` fallbacks) | Override POSIX `ps` location. |
+| `GITNEXUS_HOOK_POWERSHELL_PATH` | path | `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` (then `SysWOW64`, then `powershell.exe` on `PATH`) | Override Windows PowerShell location used by the Restart-Manager probe. |
+| `GITNEXUS_HOOK_LINUX_PROC_BUDGET_MS` | integer ms | `1200` | Max wall-clock for the Linux `/proc` fd scan before bailing out to the `lsof` fallback. |
+| `GITNEXUS_HOOK_RM_TARGET` | path | derived | Restart-Manager target file (the LadybugDB path under `.gitnexus/`). Set internally by the hook; rarely overridden manually. |
+| `GITNEXUS_DEBUG` | boolean (`1`/`true`) | unset | Verbose stderr from the hook: prints discarded augment-stderr prefixes and one-shot `.ps1` load-failure warnings. |
 
 <!-- gitnexus:end -->
 

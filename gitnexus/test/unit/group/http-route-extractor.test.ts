@@ -1,17 +1,25 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+
+const { parseSourceSafeSpy } = vi.hoisted(() => ({ parseSourceSafeSpy: vi.fn() }));
+
+vi.mock('../../../src/core/tree-sitter/safe-parse.js', async () => {
+  const { buildSafeParseMock } = await import('../../helpers/parse-source-safe-mock.js');
+  return buildSafeParseMock(parseSourceSafeSpy);
+});
+
 import { HttpRouteExtractor } from '../../../src/core/group/extractors/http-route-extractor.js';
 import type { RepoHandle } from '../../../src/core/group/types.js';
 
 describe('HttpRouteExtractor', () => {
-  const tmpDir = path.join(os.tmpdir(), `gitnexus-http-extract-${Date.now()}`);
+  let tmpDir: string;
   let extractor: HttpRouteExtractor;
 
   beforeEach(() => {
     extractor = new HttpRouteExtractor();
-    fs.mkdirSync(tmpDir, { recursive: true });
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitnexus-http-extract-'));
   });
 
   afterEach(() => {
@@ -428,6 +436,74 @@ def create_order():
         consumers.find((c) => c.contractId === 'http::POST::/api/orders/{param}'),
       ).toBeDefined();
     });
+    it('extracts Python httpx.AsyncClient calls assigned to attributes or aliases', async () => {
+      const dir = path.join(tmpDir, 'python-httpx-consumer');
+      fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'src', 'client.py'),
+        `
+import httpx
+
+module_client = httpx.AsyncClient(base_url="https://svc.local")
+
+class TopicClient:
+    def __init__(self):
+        self._client = httpx.AsyncClient(base_url="https://svc.local")
+
+    async def list_topics(self):
+        return await self._client.get("/topic")
+
+    async def publish(self):
+        return await self._client.request("POST", "/questions/import")
+
+    async def delete_topic(self):
+        return await self._client.delete("/topic")
+
+async def check_duplicate():
+    async with httpx.AsyncClient() as client:
+        data = {}
+        data.get("/nope")
+        service.request("POST", "/nope")
+        return await client.post("https://svc.local/questions/duplicate-check")
+
+def unrelated_scope_collision():
+    client = acquire_cache_client()
+    return client.get("/ignored-same-name")
+
+def module_scope_shadow_collision():
+    client = acquire_cache_client()
+    return client.get("/ignored-module-same-name")
+
+module_client.get("/module-topic")
+`,
+      );
+
+      const contracts = await extractor.extract(null, dir, makeRepo(dir));
+      const consumers = contracts.filter((c) => c.role === 'consumer');
+
+      const expected = [
+        'http::GET::/topic',
+        'http::POST::/questions/import',
+        'http::DELETE::/topic',
+        'http::POST::/questions/duplicate-check',
+        'http::GET::/module-topic',
+      ];
+
+      for (const contractId of expected) {
+        const consumer = consumers.find((c) => c.contractId === contractId);
+        expect(consumer).toBeDefined();
+        expect(consumer?.meta.framework).toBe('python-httpx');
+      }
+
+      expect(consumers.find((c) => c.contractId === 'http::GET::/nope')).toBeUndefined();
+      expect(consumers.find((c) => c.contractId === 'http::POST::/nope')).toBeUndefined();
+      expect(
+        consumers.find((c) => c.contractId === 'http::GET::/ignored-same-name'),
+      ).toBeUndefined();
+      expect(
+        consumers.find((c) => c.contractId === 'http::GET::/ignored-module-same-name'),
+      ).toBeUndefined();
+    });
 
     it('extracts Java RestTemplate, WebClient and OkHttp calls', async () => {
       const dir = path.join(tmpDir, 'java-consumer');
@@ -727,6 +803,122 @@ router.get('/api/posts/{postId}', handler2);
           expect(c.meta.path).toContain('{param}');
         }
       });
+    });
+  });
+
+  // ─── #1185: contract extractors must honour .gitnexusignore ─────────
+  //
+  // Pre-#1185 the source-scan path used a hardcoded
+  // `[node_modules, .git, dist, build, vendor]` glob ignore array, so a
+  // user's `.gitnexusignore` pattern (e.g. a Python venv `mentor_env/`,
+  // a generated stubs dir, a noisy fixture tree) was silently scanned
+  // anyway. Since #1185 the source-scan path consumes the shared
+  // `IgnoreService` (mirrors `filesystem-walker.ts`), so any pattern in
+  // `.gitnexusignore` (or `.gitignore`) prunes the glob.
+  describe('respects .gitnexusignore (#1185)', () => {
+    it('source-scan glob skips files matched by .gitnexusignore', async () => {
+      const dir = path.join(tmpDir, 'gitnexusignore-honoured');
+      fs.mkdirSync(path.join(dir, 'src/routes'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'mentor_env/lib'), { recursive: true });
+      // Control: a normal route file that SHOULD be discovered.
+      fs.writeFileSync(
+        path.join(dir, 'src/routes/users.ts'),
+        `import { Router } from 'express';
+const router = Router();
+router.get('/api/users', (req, res) => res.json([]));
+export default router;
+`,
+      );
+      // Vendored source under a venv-style dir: the same Express
+      // pattern, but inside a directory the user wants excluded.
+      fs.writeFileSync(
+        path.join(dir, 'mentor_env/lib/leaked.ts'),
+        `import { Router } from 'express';
+const r = Router();
+r.get('/api/leaked', (req, res) => res.json([]));
+export default r;
+`,
+      );
+      fs.writeFileSync(path.join(dir, '.gitnexusignore'), 'mentor_env/\n');
+
+      const contracts = await extractor.extract(null, dir, makeRepo(dir));
+      const providers = contracts.filter((c) => c.role === 'provider');
+      // Control survives.
+      expect(providers.find((c) => c.contractId === 'http::GET::/api/users')).toBeDefined();
+      // Excluded path is pruned at the glob level — nothing emitted.
+      expect(providers.find((c) => c.contractId === 'http::GET::/api/leaked')).toBeUndefined();
+      // Defence-in-depth: no contract whose symbolRef is under mentor_env/.
+      expect(contracts.some((c) => c.symbolRef?.filePath?.startsWith('mentor_env/'))).toBe(false);
+    });
+
+    // Pinned by the @claude review on PR #1247: above, only `.gitnexusignore`
+    // is exercised. `createIgnoreFilter` reads `.gitignore` too via
+    // `loadIgnoreRules`, but that integration is only proven at the
+    // `IgnoreService` level — no extractor-level test for the
+    // `.gitignore`-only code path. Adding one minimal extractor-level
+    // assertion here closes the gap (one shared test is sufficient
+    // because all three extractors consume the same filter object).
+    it('source-scan glob also skips files matched by `.gitignore` (no `.gitnexusignore`)', async () => {
+      const dir = path.join(tmpDir, 'gitignore-honoured');
+      fs.mkdirSync(path.join(dir, 'src/routes'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'mentor_env/lib'), { recursive: true });
+      // Same Express pattern as above so detection logic is identical.
+      fs.writeFileSync(
+        path.join(dir, 'src/routes/users.ts'),
+        `import { Router } from 'express';
+const router = Router();
+router.get('/api/users', (req, res) => res.json([]));
+export default router;
+`,
+      );
+      fs.writeFileSync(
+        path.join(dir, 'mentor_env/lib/leaked.ts'),
+        `import { Router } from 'express';
+const r = Router();
+r.get('/api/leaked', (req, res) => res.json([]));
+export default r;
+`,
+      );
+      // Note: NO .gitnexusignore — only `.gitignore`. This proves the
+      // `.gitignore` code path inside `createIgnoreFilter` is wired to
+      // the extractors' globs.
+      fs.writeFileSync(path.join(dir, '.gitignore'), 'mentor_env/\n');
+
+      const contracts = await extractor.extract(null, dir, makeRepo(dir));
+      const providers = contracts.filter((c) => c.role === 'provider');
+      expect(providers.find((c) => c.contractId === 'http::GET::/api/users')).toBeDefined();
+      expect(providers.find((c) => c.contractId === 'http::GET::/api/leaked')).toBeUndefined();
+      expect(contracts.some((c) => c.symbolRef?.filePath?.startsWith('mentor_env/'))).toBe(false);
+    });
+  });
+
+  describe('Windows SIGSEGV regression — large input must route through parseSourceSafe', () => {
+    it('routes >32 767-char source file through parseSourceSafe (not direct parser.parse)', async () => {
+      parseSourceSafeSpy.mockClear();
+
+      // >40 000-char Java controller file. Direct parser.parse(content) on
+      // an input this size SIGSEGVs the process on Windows. The spy assertion
+      // is what catches the regression — a "no throw" assertion alone is
+      // satisfied by the bypass on Linux/macOS where parser.parse(40 000 chars)
+      // succeeds.
+      const padding = Array.from(
+        { length: 600 },
+        (_, i) => `    public String helper${i}() { return "padding-${i}-aaaaaaaaaaaaaaaaaaa"; }\n`,
+      ).join('');
+      const largeJava = `package com.example;\n\n@RestController\npublic class BigController {\n${padding}}\n`;
+      expect(largeJava.length).toBeGreaterThan(40_000);
+
+      // Use mkdtempSync rather than a fixed subdir name: satisfies CodeQL's
+      // js/insecure-temporary-file rule by generating a unique random suffix
+      // instead of relying on the parent tmpDir's predictable Date.now() name.
+      const dir = fs.mkdtempSync(path.join(tmpDir, 'large-input-'));
+      fs.mkdirSync(path.join(dir, 'src/controller'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'src/controller/BigController.java'), largeJava);
+
+      const mockDbExecutor = async (_query: string) => [];
+      await extractor.extract(mockDbExecutor, dir, makeRepo(dir));
+
+      expect(parseSourceSafeSpy).toHaveBeenCalled();
     });
   });
 });

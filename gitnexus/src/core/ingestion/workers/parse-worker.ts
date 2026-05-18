@@ -6,7 +6,8 @@ import Python from 'tree-sitter-python';
 import Java from 'tree-sitter-java';
 import C from 'tree-sitter-c';
 import CPP from 'tree-sitter-cpp';
-import CSharp from 'tree-sitter-c-sharp';
+// Explicit subpath import — see parser-loader.ts for rationale (#1013).
+import CSharp from 'tree-sitter-c-sharp/bindings/node/index.js';
 import Go from 'tree-sitter-go';
 import Rust from 'tree-sitter-rust';
 import PHP from 'tree-sitter-php';
@@ -14,7 +15,12 @@ import Ruby from 'tree-sitter-ruby';
 import { createRequire } from 'node:module';
 import { SupportedLanguages } from 'gitnexus-shared';
 import { getProvider } from '../languages/index.js';
-import { getTreeSitterBufferSize, TREE_SITTER_MAX_BUFFER } from '../constants.js';
+import {
+  getTreeSitterBufferSize,
+  getTreeSitterContentByteLength,
+  TREE_SITTER_MAX_BUFFER,
+} from '../constants.js';
+import { parseSourceSafe } from '../../tree-sitter/safe-parse.js';
 import type { SymbolTableReader } from '../model/symbol-table.js';
 import type { ExtractedHeritage } from '../model/heritage-map.js';
 
@@ -65,7 +71,7 @@ import {
   isVueSetupTopLevel,
 } from '../vue-sfc-extractor.js';
 import type { NamedBinding } from '../named-bindings/types.js';
-import type { NodeLabel } from 'gitnexus-shared';
+import type { NodeLabel, ParameterTypeClass } from 'gitnexus-shared';
 import type { FieldInfo, FieldExtractorContext } from '../field-types.js';
 import type { MethodInfo, MethodExtractorContext } from '../method-types.js';
 import type { VariableExtractorContext } from '../variable-types.js';
@@ -76,10 +82,12 @@ import {
   constTagForId,
   buildCollisionGroups,
 } from '../utils/method-props.js';
+import { extractTemplateArguments, templateArgumentsIdTag } from '../utils/template-arguments.js';
 import type { LanguageProvider } from '../language-provider.js';
 import type { ParsedFile } from 'gitnexus-shared';
 import { extractParsedFile } from '../scope-extractor-bridge.js';
 
+import { logger } from '../../logger.js';
 // ============================================================================
 // Types for serializable results
 // ============================================================================
@@ -120,8 +128,10 @@ interface ParsedSymbol {
   parameterCount?: number;
   requiredParameterCount?: number;
   parameterTypes?: string[];
+  parameterTypeClasses?: ParameterTypeClass[];
   returnType?: string;
   declaredType?: string;
+  templateArguments?: string[];
   ownerId?: string;
   visibility?: string;
   isStatic?: boolean;
@@ -174,6 +184,8 @@ export interface ExtractedAssignment {
   propertyName: string;
   /** Resolved type name of the receiver if available from TypeEnv */
   receiverTypeName?: string;
+  /** 1-indexed line number of the assignment site (used for per-site dedup) */
+  line?: number;
 }
 
 // `ExtractedHeritage` now lives in `../model/heritage-map.ts` and is
@@ -209,6 +221,7 @@ export interface ExtractedToolDef {
   toolName: string;
   description: string;
   lineNumber: number;
+  handlerNodeId?: string;
 }
 
 export interface ExtractedORMQuery {
@@ -569,32 +582,48 @@ const findEnclosingFunctionId = (
           filePath,
           provider.resolveEnclosingOwner,
         );
-        const qualifiedName = classInfo ? `${classInfo.className}.${funcName}` : funcName;
+        const encLang = getLanguageFromFilename(filePath);
+        const standaloneMethodInfo =
+          (finalLabel === 'Method' || finalLabel === 'Constructor') &&
+          encLang === SupportedLanguages.Go &&
+          provider.methodExtractor?.extractFromNode
+            ? provider.methodExtractor.extractFromNode(current, {
+                filePath,
+                language: encLang,
+              })
+            : null;
+        const ownerName = classInfo?.className ?? standaloneMethodInfo?.receiverType ?? undefined;
+        const qualifiedName = ownerName ? `${ownerName}.${funcName}` : funcName;
         // Include #<arity> suffix to match definition-phase Method/Constructor IDs.
         // Use the same MethodExtractor (getMethodInfo) as the definition phase.
         // When same-arity collisions exist, also append ~type1,type2.
         let arity: number | undefined;
         let encTypeTag = '';
         if (finalLabel === 'Method' || finalLabel === 'Constructor') {
-          const encLang = getLanguageFromFilename(filePath);
-          const classNode =
-            findEnclosingClassNode(current) ?? findClassNodeByQualifiedName(current);
-          if (classNode && encLang) {
-            const methodMap = getMethodInfo(classNode, provider, {
-              filePath,
-              language: encLang,
-            });
-            const defLine = current.startPosition.row + 1;
-            const info = methodMap?.get(`${funcName}:${defLine}`);
-            if (info) {
-              arity = info.parameters.some((p) => p.isVariadic)
-                ? undefined
-                : info.parameters.length;
-              if (methodMap && arity !== undefined) {
-                const g = buildCollisionGroups(methodMap);
-                encTypeTag =
-                  typeTagForId(methodMap, funcName, arity, info, encLang, g) +
-                  constTagForId(methodMap, funcName, arity, info, g);
+          if (standaloneMethodInfo) {
+            arity = standaloneMethodInfo.parameters.some((p) => p.isVariadic)
+              ? undefined
+              : standaloneMethodInfo.parameters.length;
+          } else {
+            const classNode =
+              findEnclosingClassNode(current) ?? findClassNodeByQualifiedName(current);
+            if (classNode && encLang) {
+              const methodMap = getMethodInfo(classNode, provider, {
+                filePath,
+                language: encLang,
+              });
+              const defLine = current.startPosition.row + 1;
+              const info = methodMap?.get(`${funcName}:${defLine}`);
+              if (info) {
+                arity = info.parameters.some((p) => p.isVariadic)
+                  ? undefined
+                  : info.parameters.length;
+                if (methodMap && arity !== undefined) {
+                  const g = buildCollisionGroups(methodMap);
+                  encTypeTag =
+                    typeTagForId(methodMap, funcName, arity, info, encLang, g) +
+                    constTagForId(methodMap, funcName, arity, info, g);
+                }
               }
             }
           }
@@ -742,7 +771,7 @@ const processBatch = (
 
   let totalProcessed = 0;
   let lastReported = 0;
-  const PROGRESS_INTERVAL = 100; // report every 100 files
+  const PROGRESS_INTERVAL = Math.max(1, Math.min(100, Math.ceil(files.length / 10)));
 
   const onFileProcessed = onProgress
     ? () => {
@@ -806,6 +835,10 @@ const processBatch = (
           (result.skippedLanguages[language] || 0) + tsxFiles.length;
       }
     }
+  }
+
+  if (onProgress && totalProcessed !== lastReported) {
+    onProgress(totalProcessed);
   }
 
   return result;
@@ -1360,16 +1393,14 @@ const processFileGroup = (
     if (parentPort) {
       parentPort.postMessage({ type: 'warning', message });
     } else {
-      console.warn(message);
+      logger.warn(message);
     }
     return;
   }
 
-  const provider = getProvider(language);
-
   for (const file of files) {
     // Skip files larger than the max tree-sitter buffer (32 MB)
-    if (file.content.length > TREE_SITTER_MAX_BUFFER) continue;
+    if (getTreeSitterContentByteLength(file.content) > TREE_SITTER_MAX_BUFFER) continue;
 
     // Vue SFC preprocessing: extract <script> block content
     let parseContent = file.content;
@@ -1383,20 +1414,20 @@ const processFileGroup = (
       isVueSetup = extracted.isSetup;
     }
 
-    // Language-specific preprocessing (e.g., Ascend C attribute stripping).
-    if (provider.sourcePreprocessor) {
-      parseContent = provider.sourcePreprocessor(parseContent, file.path);
-    }
+    // Per-language source-text transform (e.g., UE macro stripping for C++).
+    // Length-preserving — see LanguageProvider.preprocessSource contract.
+    parseContent =
+      getProvider(language).preprocessSource?.(parseContent, file.path) ?? parseContent;
 
     clearCaches(); // Reset memoization before each new file
 
     let tree;
     try {
-      tree = parser.parse(parseContent, undefined, {
-        bufferSize: getTreeSitterBufferSize(parseContent.length),
+      tree = parseSourceSafe(parser, parseContent, undefined, {
+        bufferSize: getTreeSitterBufferSize(parseContent),
       });
     } catch (err) {
-      console.warn(
+      logger.warn(
         `Failed to parse file ${file.path}: ${err instanceof Error ? err.message : String(err)}`,
       );
       continue;
@@ -1409,11 +1440,13 @@ const processFileGroup = (
     try {
       matches = query.matches(tree.rootNode);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `Query execution failed for ${file.path}: ${err instanceof Error ? err.message : String(err)}`,
       );
       continue;
     }
+
+    const provider = getProvider(language);
 
     // RFC #909 Ring 2: produce a `ParsedFile` for the new scope-based
     // resolution pipeline. No-op (returns undefined) for every language
@@ -1421,10 +1454,16 @@ const processFileGroup = (
     // Runs BEFORE legacy extraction and its result is independent: a
     // failure here is caught inside `extractParsedFile` and does NOT
     // affect the legacy DAG path that follows.
-    const parsedFile = extractParsedFile(provider, parseContent, file.path, (message) => {
-      if (parentPort) parentPort.postMessage({ type: 'warning', message });
-      else console.warn(message);
-    });
+    const parsedFile = extractParsedFile(
+      provider,
+      parseContent,
+      file.path,
+      (message) => {
+        if (parentPort) parentPort.postMessage({ type: 'warning', message });
+        else logger.warn(message);
+      },
+      tree,
+    );
     if (parsedFile !== undefined) result.parsedFiles.push(parsedFile);
 
     // Pre-pass: extract heritage from query matches to build parentMap for buildTypeEnv.
@@ -1547,6 +1586,7 @@ const processFileGroup = (
             sourceId: srcId,
             receiverText,
             propertyName,
+            line: captureMap['assignment'].startPosition.row + 1,
             ...(receiverTypeName ? { receiverTypeName } : {}),
           });
         }
@@ -1965,6 +2005,23 @@ const processFileGroup = (
             })
           : null;
       const nodeLabel = extractedClassSymbol?.type ?? defaultNodeLabel;
+      const isClassLikeLabel =
+        nodeLabel === 'Class' ||
+        nodeLabel === 'Struct' ||
+        nodeLabel === 'Interface' ||
+        nodeLabel === 'Enum' ||
+        nodeLabel === 'Record';
+      if (
+        isClassLikeLabel &&
+        provider.classExtractor?.shouldSkipClassCapture?.({
+          captureMap,
+          definitionNode,
+          nameNode,
+          nodeLabel,
+        }) === true
+      ) {
+        continue;
+      }
 
       // Dedup: variable captures (Const/Static/Variable) may overlap with higher-priority
       // captures (e.g. `const fn = () => {}` matches both @definition.function and @definition.const).
@@ -2058,10 +2115,13 @@ const processFileGroup = (
         }
       }
 
-      // Append #<paramCount> to Method/Constructor IDs to disambiguate overloads.
-      // Functions are not suffixed — they don't overload by name in the same scope.
+      // Append #<paramCount> to owned callable IDs to disambiguate overloads.
+      // Top-level Function IDs stay stable; functions inside an owner may overload.
       // When same-arity collisions exist, append ~type1,type2 for further disambiguation.
-      const needsAritySuffix = nodeLabel === 'Method' || nodeLabel === 'Constructor';
+      const needsAritySuffix =
+        nodeLabel === 'Method' ||
+        nodeLabel === 'Constructor' ||
+        (nodeLabel === 'Function' && enclosingClassId !== null);
       let arityTag = needsAritySuffix && arityForId !== undefined ? `#${arityForId}` : '';
       if (arityTag && defMethodMap && defMethodInfo) {
         const groups = buildCollisionGroups(defMethodMap);
@@ -2075,7 +2135,31 @@ const processFileGroup = (
         );
         arityTag += constTagForId(defMethodMap, nodeName, arityForId, defMethodInfo, groups);
       }
-      const nodeId = generateId(nodeLabel, `${file.path}:${qualifiedName}${arityTag}`);
+      const classTemplateArguments =
+        extractedClassSymbol?.templateArguments ??
+        provider.classExtractor?.extractTemplateArgumentsFromCapture?.({
+          captureMap,
+          definitionNode,
+          nameNode,
+        }) ??
+        (captureMap['template-arguments']
+          ? extractTemplateArguments(captureMap['template-arguments'].text)
+          : undefined) ??
+        (nameNode && nameNode.text ? extractTemplateArguments(nameNode.text) : undefined);
+      const classTemplateTag =
+        (nodeLabel === 'Class' ||
+          nodeLabel === 'Struct' ||
+          nodeLabel === 'Interface' ||
+          nodeLabel === 'Enum' ||
+          nodeLabel === 'Record') &&
+        classTemplateArguments !== undefined &&
+        classTemplateArguments.length > 0
+          ? templateArgumentsIdTag(classTemplateArguments)
+          : '';
+      const nodeId = generateId(
+        nodeLabel,
+        `${file.path}:${qualifiedName}${classTemplateTag}${arityTag}`,
+      );
       const classNodeForSymbol = definitionNode || nameNode;
       const qualifiedTypeName =
         extractedClassSymbol?.qualifiedName ??
@@ -2130,8 +2214,9 @@ const processFileGroup = (
               result.toolDefs.push({
                 filePath: file.path,
                 toolName: nodeName,
-                description: dec.arg || '',
+                description: (dec.arg || description || '').slice(0, 200),
                 lineNumber: definitionNode.startPosition.row + lineOffset,
+                handlerNodeId: nodeId,
               });
             }
             fileDecorators.delete(checkLine);
@@ -2197,6 +2282,9 @@ const processFileGroup = (
               ? isVueSetupTopLevel(nameNode || definitionNode)
               : cachedExportCheck(provider.exportChecker, nameNode || definitionNode, nodeName),
           ...(qualifiedTypeName !== undefined ? { qualifiedName: qualifiedTypeName } : {}),
+          ...(classTemplateArguments !== undefined && classTemplateArguments.length > 0
+            ? { templateArguments: classTemplateArguments }
+            : {}),
           ...(frameworkHint
             ? {
                 astFrameworkMultiplier: frameworkHint.entryPointMultiplier,
@@ -2220,8 +2308,12 @@ const processFileGroup = (
         parameterCount: methodProps.parameterCount as number | undefined,
         requiredParameterCount: methodProps.requiredParameterCount as number | undefined,
         parameterTypes: methodProps.parameterTypes as string[] | undefined,
+        parameterTypeClasses: methodProps.parameterTypeClasses as ParameterTypeClass[] | undefined,
         returnType: methodProps.returnType as string | undefined,
         ...(declaredType !== undefined ? { declaredType } : {}),
+        ...(classTemplateArguments !== undefined && classTemplateArguments.length > 0
+          ? { templateArguments: classTemplateArguments }
+          : {}),
         ...(enclosingClassId ? { ownerId: enclosingClassId } : {}),
         visibility: methodProps.visibility as string | undefined,
         isStatic: methodProps.isStatic as boolean | undefined,
