@@ -206,6 +206,11 @@ export function runScopeResolution(
       if (parsed !== undefined) preExtractedHits++;
     }
     if (parsed === undefined) {
+      if (fi % 50 === 0) {
+        logger.info(
+          `[scope-resolution] extracting [${fi}/${files.length}]: ${file.path} (${file.content.length} bytes)`,
+        );
+      }
       const tFile = Date.now();
       const cachedTree = treeCache?.get(file.path);
       parsed = extractParsedFile(
@@ -216,7 +221,7 @@ export function runScopeResolution(
         cachedTree,
       );
       const fileDur = Date.now() - tFile;
-      if (fileDur > 5000) {
+      if (fileDur > 2000) {
         logger.warn(
           `[scope-resolution] SLOW extract: ${file.path} took ${fileDur}ms (${file.content.length} bytes)`,
         );
