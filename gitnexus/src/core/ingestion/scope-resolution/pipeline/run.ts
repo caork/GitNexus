@@ -312,62 +312,52 @@ export function runScopeResolution(
   const tMro = Date.now();
   const mroByClassDefId = provider.buildMro(graph, parsedFiles, nodeLookup);
   diag(`Phase 2 buildMro done in ${Date.now() - tMro}ms`);
+  let tStep = Date.now();
   const extendsOnlyMroByClassDefId = provider.buildExtendsOnlyMro?.(graph, parsedFiles, nodeLookup);
+  diag(`Phase 2 buildExtendsOnlyMro done in ${Date.now() - tStep}ms`);
 
-  // Replace the empty MethodDispatchIndex that finalizeScopeModel
-  // builds by design with the populated one derived from the
-  // language's MRO. Spread produces a fresh `ScopeResolutionIndexes`
-  // instead of mutating the finalized result through an `as` cast —
-  // downstream passes get an object whose readonly guarantees match
-  // the type system.
+  tStep = Date.now();
   const indexes = {
     ...finalized,
     methodDispatch: buildPopulatedMethodDispatch(mroByClassDefId, extendsOnlyMroByClassDefId),
   };
+  diag(`Phase 2 buildPopulatedMethodDispatch done in ${Date.now() - tStep}ms`);
 
-  // Build the workspace resolution index ONCE — scope-valued lookups
-  // (`classScopeByDefId`, `moduleScopeByFile`) that `SemanticModel`
-  // cannot carry. Must run AFTER `populateOwners` (so owned defs are
-  // attributed correctly) and AFTER finalize (so module-scope
-  // bindings are available).
+  tStep = Date.now();
   const workspaceIndex = buildWorkspaceResolutionIndex(parsedFiles);
+  diag(`Phase 2 buildWorkspaceResolutionIndex done in ${Date.now() - tStep}ms`);
 
-  // Cross-file implicit-namespace visibility (C#). Must run before
-  // propagateImportedReturnTypes so the latter pass sees siblings'
-  // class bindings when chasing return-type chains across files.
-  // The hook writes to `bindingAugmentations` only; finalized
-  // `indexes.bindings` remains immutable post-finalize (I8).
   if (provider.populateNamespaceSiblings !== undefined) {
+    tStep = Date.now();
     provider.populateNamespaceSiblings(parsedFiles, indexes, {
       fileContents: getFileContents(),
       treeCache,
     });
+    diag(`Phase 2 populateNamespaceSiblings done in ${Date.now() - tStep}ms`);
   }
 
   logger.info(`[scope-resolution] Phase 2 finalize+MRO in ${Date.now() - tPhase2}ms`);
   const tFinalize = PROF ? process.hrtime.bigint() : 0n;
 
-  // Cross-package namespace typeBinding mirroring. Runs before
-  // propagateImportedReturnTypes so the SCC-ordered pass sees the
-  // mirrored bindings.
   if (provider.mirrorNamespaceTypeBindings !== undefined) {
+    tStep = Date.now();
     provider.mirrorNamespaceTypeBindings(parsedFiles, indexes, workspaceIndex);
+    diag(`Phase 2b mirrorNamespaceTypeBindings done in ${Date.now() - tStep}ms`);
   }
 
-  // Cross-file return-type propagation (Contract Invariant I3 timing:
-  // after finalize, before resolve). Split-timed separately so the
-  // SCC-ordered pass's cost is observable (PR #1050 made this O(files)
-  // with chain-follow per importer; quadratic regressions show up
-  // here, not in finalize).
   if (provider.propagatesReturnTypesAcrossImports !== false) {
+    tStep = Date.now();
     propagateImportedReturnTypes(parsedFiles, indexes, workspaceIndex);
+    diag(`Phase 2b propagateImportedReturnTypes done in ${Date.now() - tStep}ms`);
   }
 
   if (provider.populateRangeBindings !== undefined) {
+    tStep = Date.now();
     provider.populateRangeBindings(parsedFiles, indexes, {
       fileContents: getFileContents(),
       treeCache,
     });
+    diag(`Phase 2b populateRangeBindings done in ${Date.now() - tStep}ms`);
   }
   logger.info(`[scope-resolution] Phase 2b propagate in ${Date.now() - tPhase2}ms (cumulative)`);
   const tPropagate = PROF ? process.hrtime.bigint() : 0n;
@@ -381,6 +371,7 @@ export function runScopeResolution(
   validateBindingsImmutability(indexes, onWarn);
 
   // ── Phase 3: resolve references via Registry.lookup ────────────────────
+  diag(`Phase 3 resolveReferenceSites starting...`);
   const tPhase3 = Date.now();
   const registryProviders: RegistryProviders = {
     arityCompatibility: provider.arityCompatibility,
