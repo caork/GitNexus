@@ -386,9 +386,11 @@ export function runScopeResolution(
   const tResolve = PROF ? process.hrtime.bigint() : 0n;
 
   // ── Phase 4: emit graph edges (LOAD-BEARING ORDER — see I1) ────────────
+  diag(`Phase 4 emit graph edges starting...`);
   const tPhase4 = Date.now();
   const handledSites = new Set<string>(preEmittedInheritanceSites);
   let tSub = Date.now();
+  diag(`Phase 4a emitReceiverBoundCalls starting...`);
   const receiverExtras = emitReceiverBoundCalls(
     graph,
     indexes,
@@ -399,10 +401,12 @@ export function runScopeResolution(
     workspaceIndex,
     readonlyModel,
   );
+  diag(`Phase 4a done: ${receiverExtras} edges in ${Date.now() - tSub}ms`);
   logger.info(
     `[scope-resolution] Phase 4a receiver-bound: ${receiverExtras} edges in ${Date.now() - tSub}ms`,
   );
   tSub = Date.now();
+  diag(`Phase 4b emitUnresolvedReceiverEdges starting...`);
   const unresolvedReceiverExtras =
     provider.emitUnresolvedReceiverEdges !== undefined
       ? provider.emitUnresolvedReceiverEdges(
@@ -414,10 +418,12 @@ export function runScopeResolution(
           readonlyModel,
         )
       : 0;
+  diag(`Phase 4b done: ${unresolvedReceiverExtras} edges in ${Date.now() - tSub}ms`);
   logger.info(
     `[scope-resolution] Phase 4b unresolved-receiver: ${unresolvedReceiverExtras} edges in ${Date.now() - tSub}ms`,
   );
   tSub = Date.now();
+  diag(`Phase 4c emitFreeCallFallback starting...`);
   const freeCallExtras = emitFreeCallFallback(
     graph,
     indexes,
@@ -436,10 +442,12 @@ export function runScopeResolution(
       constraintCompatibility: provider.constraintCompatibility,
     },
   );
+  diag(`Phase 4c done: ${freeCallExtras} edges in ${Date.now() - tSub}ms`);
   logger.info(
     `[scope-resolution] Phase 4c free-call: ${freeCallExtras} edges in ${Date.now() - tSub}ms`,
   );
   tSub = Date.now();
+  diag(`Phase 4d emitReferencesViaLookup starting...`);
   const { emitted, skipped } = emitReferencesViaLookup(
     graph,
     indexes,
@@ -447,15 +455,20 @@ export function runScopeResolution(
     nodeLookup,
     handledSites,
   );
+  diag(`Phase 4d done: ${emitted} emitted, ${skipped} skipped in ${Date.now() - tSub}ms`);
   logger.info(
     `[scope-resolution] Phase 4d ref-lookup: ${emitted} emitted, ${skipped} skipped in ${Date.now() - tSub}ms`,
   );
   tSub = Date.now();
+  diag(`Phase 4e emitImportEdges starting...`);
   const importsEmitted = emitImportEdges(
     graph,
     indexes.imports,
     indexes.scopeTree,
     provider.importEdgeReason,
+  );
+  diag(
+    `Phase 4e done: ${importsEmitted} imports in ${Date.now() - tSub}ms (Phase 4 total: ${Date.now() - tPhase4}ms)`,
   );
   logger.info(
     `[scope-resolution] Phase 4e imports: ${importsEmitted} in ${Date.now() - tSub}ms (Phase 4 total: ${Date.now() - tPhase4}ms)`,
