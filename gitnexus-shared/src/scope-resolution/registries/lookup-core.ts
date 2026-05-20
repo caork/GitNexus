@@ -333,15 +333,14 @@ function collectOwnedMembers(
   memberName: string,
   ctx: RegistryContext,
 ): readonly SymbolDefinition[] {
-  // An owner's members are defs whose `ownerId === ownerDefId` and whose
-  // simple name matches `memberName`. We iterate `defs.byId` — O(D) per
-  // call today. A future by-owner index would make this O(K); tracked as
-  // a follow-up optimization before Ring 3 flips go production.
+  // O(K) lookup via the by-owner index (K = members of this owner).
+  // Previously this was O(D) scanning all defs — the dominant bottleneck
+  // for large C++ codebases with deep MRO chains and many reference sites.
+  const bucket = ctx.defs.byOwner.get(ownerDefId);
+  if (bucket === undefined) return EMPTY_DEFS;
   const out: SymbolDefinition[] = [];
-  for (const def of ctx.defs.byId.values()) {
-    if (def.ownerId !== ownerDefId) continue;
-    if (simpleNameOf(def) !== memberName) continue;
-    out.push(def);
+  for (const def of bucket) {
+    if (simpleNameOf(def) === memberName) out.push(def);
   }
   return out;
 }
@@ -476,3 +475,4 @@ function rankCandidates(perCandidate: Map<DefId, CandidateState>): readonly Reso
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const EMPTY: readonly Resolution[] = Object.freeze([]);
+const EMPTY_DEFS: readonly SymbolDefinition[] = Object.freeze([]);

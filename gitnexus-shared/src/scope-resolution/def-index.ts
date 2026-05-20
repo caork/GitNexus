@@ -16,6 +16,15 @@ import type { DefId } from './types.js';
 
 export interface DefIndex {
   readonly byId: ReadonlyMap<DefId, SymbolDefinition>;
+  /**
+   * Reverse index: owner DefId → defs whose `ownerId` equals that id.
+   *
+   * Used by `collectOwnedMembers` in `lookup-core.ts` to turn an O(D)
+   * full-table scan into an O(K) bucket lookup (where K is the number of
+   * members owned by a given class/struct/namespace). Built once during
+   * `buildDefIndex`; the map is never mutated afterward.
+   */
+  readonly byOwner: ReadonlyMap<DefId, readonly SymbolDefinition[]>;
   readonly size: number;
   get(id: DefId): SymbolDefinition | undefined;
   has(id: DefId): boolean;
@@ -37,18 +46,31 @@ export interface DefIndex {
  */
 export function buildDefIndex(defs: readonly SymbolDefinition[]): DefIndex {
   const byId = new Map<DefId, SymbolDefinition>();
+  const byOwner = new Map<DefId, SymbolDefinition[]>();
   for (const def of defs) {
     if (byId.has(def.nodeId)) continue; // first-write-wins
     byId.set(def.nodeId, def);
+    if (def.ownerId !== undefined) {
+      let bucket = byOwner.get(def.ownerId);
+      if (bucket === undefined) {
+        bucket = [];
+        byOwner.set(def.ownerId, bucket);
+      }
+      bucket.push(def);
+    }
   }
-  return wrapIndex(byId);
+  return wrapIndex(byId, byOwner);
 }
 
 // ─── Internal ───────────────────────────────────────────────────────────────
 
-function wrapIndex(byId: Map<DefId, SymbolDefinition>): DefIndex {
+function wrapIndex(
+  byId: Map<DefId, SymbolDefinition>,
+  byOwner: Map<DefId, SymbolDefinition[]>,
+): DefIndex {
   return {
     byId,
+    byOwner,
     get size() {
       return byId.size;
     },
