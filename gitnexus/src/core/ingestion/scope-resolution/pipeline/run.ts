@@ -197,6 +197,9 @@ export function runScopeResolution(
   let preExtractedHits = 0;
   for (let fi = 0; fi < files.length; fi++) {
     const file = files[fi];
+    if (fi % 500 === 0) {
+      logger.info(`[scope-resolution] Phase 1 file [${fi}/${files.length}]: ${file.path}`);
+    }
     let parsed: ParsedFile | undefined;
     // Fast path: a worker (during the parse phase) already produced a
     // ParsedFile for this file via `extractParsedFile`. Reuse it
@@ -229,10 +232,17 @@ export function runScopeResolution(
         continue;
       }
     }
+    const tOwn = Date.now();
     provider.populateOwners(parsed);
+    const ownDur = Date.now() - tOwn;
+    if (ownDur > 1000) {
+      logger.warn(`[scope-resolution] SLOW populateOwners: ${file.path} took ${ownDur}ms`);
+    }
     parsedFiles.push(parsed);
-    if ((fi + 1) % 200 === 0) {
-      logger.info(`[scope-resolution] Phase 1 progress: ${fi + 1}/${files.length} files extracted`);
+    if ((fi + 1) % 200 === 0 || fi < 5) {
+      logger.info(
+        `[scope-resolution] Phase 1 progress: ${fi + 1}/${files.length} (pre=${preExtractedHits})`,
+      );
     }
   }
   if (PROF && preExtracted !== undefined) {
