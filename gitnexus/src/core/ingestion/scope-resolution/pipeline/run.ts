@@ -206,11 +206,9 @@ export function runScopeResolution(
       if (parsed !== undefined) preExtractedHits++;
     }
     if (parsed === undefined) {
-      if (fi % 50 === 0) {
-        logger.info(
-          `[scope-resolution] extracting [${fi}/${files.length}]: ${file.path} (${file.content.length} bytes)`,
-        );
-      }
+      logger.info(
+        `[scope-resolution] extracting [${fi}/${files.length}]: ${file.path} (${file.content.length} bytes)`,
+      );
       const tFile = Date.now();
       const cachedTree = treeCache?.get(file.path);
       parsed = extractParsedFile(
