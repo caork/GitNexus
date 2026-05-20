@@ -195,7 +195,8 @@ export function runScopeResolution(
   const treeCache = input.treeCache;
   const preExtracted = input.preExtractedParsedFiles;
   let preExtractedHits = 0;
-  for (const file of files) {
+  for (let fi = 0; fi < files.length; fi++) {
+    const file = files[fi];
     let parsed: ParsedFile | undefined;
     // Fast path: a worker (during the parse phase) already produced a
     // ParsedFile for this file via `extractParsedFile`. Reuse it
@@ -205,6 +206,7 @@ export function runScopeResolution(
       if (parsed !== undefined) preExtractedHits++;
     }
     if (parsed === undefined) {
+      const tFile = Date.now();
       const cachedTree = treeCache?.get(file.path);
       parsed = extractParsedFile(
         provider.languageProvider,
@@ -213,6 +215,12 @@ export function runScopeResolution(
         onWarn,
         cachedTree,
       );
+      const fileDur = Date.now() - tFile;
+      if (fileDur > 5000) {
+        logger.warn(
+          `[scope-resolution] SLOW extract: ${file.path} took ${fileDur}ms (${file.content.length} bytes)`,
+        );
+      }
       if (parsed === undefined) {
         filesSkipped++;
         continue;
@@ -220,13 +228,20 @@ export function runScopeResolution(
     }
     provider.populateOwners(parsed);
     parsedFiles.push(parsed);
+    if ((fi + 1) % 200 === 0) {
+      logger.info(`[scope-resolution] Phase 1 progress: ${fi + 1}/${files.length} files extracted`);
+    }
   }
   if (PROF && preExtracted !== undefined) {
     logger.warn(`[scope-resolution prof] pre-extracted hits: ${preExtractedHits}/${files.length}`);
   }
+  logger.info(
+    `[scope-resolution] Phase 1 extract loop done: ${parsedFiles.length} files (${filesSkipped} skipped, ${preExtractedHits} pre-extracted) in ${Date.now() - tPhase1}ms`,
+  );
+  const tWsOwners = Date.now();
   provider.populateWorkspaceOwners?.(parsedFiles, { fileContents: getFileContents() });
   logger.info(
-    `[scope-resolution] Phase 1 extract: ${parsedFiles.length} files (${filesSkipped} skipped, ${preExtractedHits} pre-extracted) in ${Date.now() - tPhase1}ms`,
+    `[scope-resolution] Phase 1 populateWorkspaceOwners in ${Date.now() - tWsOwners}ms (Phase 1 total: ${Date.now() - tPhase1}ms)`,
   );
 
   // Reconcile scope-resolution's ownership view into the SemanticModel.
