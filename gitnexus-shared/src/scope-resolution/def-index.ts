@@ -25,6 +25,16 @@ export interface DefIndex {
    * `buildDefIndex`; the map is never mutated afterward.
    */
   readonly byOwner: ReadonlyMap<DefId, readonly SymbolDefinition[]>;
+  /**
+   * Reverse index: simple name → defs whose simple name (last segment of
+   * qualifiedName) equals that string.
+   *
+   * Used by `pickUniqueGlobalCallable` in `free-call-fallback.ts` to turn
+   * an O(D) full-table scan into an O(K) bucket lookup (where K is the
+   * number of defs with the same simple name). Built once during
+   * `buildDefIndex`; the map is never mutated afterward.
+   */
+  readonly bySimpleName: ReadonlyMap<string, readonly SymbolDefinition[]>;
   readonly size: number;
   get(id: DefId): SymbolDefinition | undefined;
   has(id: DefId): boolean;
@@ -47,6 +57,7 @@ export interface DefIndex {
 export function buildDefIndex(defs: readonly SymbolDefinition[]): DefIndex {
   const byId = new Map<DefId, SymbolDefinition>();
   const byOwner = new Map<DefId, SymbolDefinition[]>();
+  const bySimpleName = new Map<string, SymbolDefinition[]>();
   for (const def of defs) {
     if (byId.has(def.nodeId)) continue; // first-write-wins
     byId.set(def.nodeId, def);
@@ -58,8 +69,18 @@ export function buildDefIndex(defs: readonly SymbolDefinition[]): DefIndex {
       }
       bucket.push(def);
     }
+    // Index by simple name (last segment of qualifiedName).
+    const simpleName = def.qualifiedName?.split('.').pop() ?? def.qualifiedName;
+    if (simpleName !== undefined && simpleName.length > 0) {
+      let nameBucket = bySimpleName.get(simpleName);
+      if (nameBucket === undefined) {
+        nameBucket = [];
+        bySimpleName.set(simpleName, nameBucket);
+      }
+      nameBucket.push(def);
+    }
   }
-  return wrapIndex(byId, byOwner);
+  return wrapIndex(byId, byOwner, bySimpleName);
 }
 
 // ─── Internal ───────────────────────────────────────────────────────────────
@@ -67,10 +88,12 @@ export function buildDefIndex(defs: readonly SymbolDefinition[]): DefIndex {
 function wrapIndex(
   byId: Map<DefId, SymbolDefinition>,
   byOwner: Map<DefId, SymbolDefinition[]>,
+  bySimpleName: Map<string, SymbolDefinition[]>,
 ): DefIndex {
   return {
     byId,
     byOwner,
+    bySimpleName,
     get size() {
       return byId.size;
     },

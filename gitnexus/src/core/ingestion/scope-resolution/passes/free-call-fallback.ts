@@ -37,6 +37,8 @@ import {
   type ConversionRankFn,
 } from './overload-narrowing.js';
 
+const EMPTY_POOL: readonly SymbolDefinition[] = Object.freeze([]);
+
 export function emitFreeCallFallback(
   graph: KnowledgeGraph,
   scopes: ScopeResolutionIndexes,
@@ -312,9 +314,9 @@ function pickUniqueGlobalCallable(
 ): SymbolDefinition | undefined {
   const scopeDefs: SymbolDefinition[] = [];
   const scopeSeen = new Set<string>();
-  for (const def of scopes.defs.byId.values()) {
-    const simple = def.qualifiedName?.split('.').pop() ?? def.qualifiedName;
-    if (simple !== name) continue;
+  // Use bySimpleName index for O(K) lookup instead of O(D) full scan.
+  const namePool = scopes.defs.bySimpleName.get(name) ?? EMPTY_POOL;
+  for (const def of namePool) {
     if (def.type !== 'Function' && def.type !== 'Method' && def.type !== 'Constructor') continue;
     // Skip file-local defs (e.g. C `static` functions) that live in a
     // different file from the caller — they are logically invisible.
