@@ -195,9 +195,12 @@ export function runScopeResolution(
   const treeCache = input.treeCache;
   const preExtracted = input.preExtractedParsedFiles;
   let preExtractedHits = 0;
+  logger.info(
+    `[scope-resolution] Phase 1 loop start: ${files.length} files, preExtracted=${preExtracted !== undefined ? preExtracted.size : 'none'}, treeCache=${treeCache ? 'yes' : 'no'}`,
+  );
   for (let fi = 0; fi < files.length; fi++) {
     const file = files[fi];
-    if (fi % 500 === 0) {
+    if (fi < 3 || fi % 500 === 0) {
       logger.info(`[scope-resolution] Phase 1 file [${fi}/${files.length}]: ${file.path}`);
     }
     let parsed: ParsedFile | undefined;
@@ -210,7 +213,7 @@ export function runScopeResolution(
     }
     if (parsed === undefined) {
       logger.info(
-        `[scope-resolution] extracting [${fi}/${files.length}]: ${file.path} (${file.content.length} bytes)`,
+        `[scope-resolution] fresh-extract [${fi}/${files.length}]: ${file.path} (${file.content.length} bytes, cached=${treeCache?.get(file.path) !== undefined})`,
       );
       const tFile = Date.now();
       const cachedTree = treeCache?.get(file.path);
@@ -222,6 +225,7 @@ export function runScopeResolution(
         cachedTree,
       );
       const fileDur = Date.now() - tFile;
+      logger.info(`[scope-resolution] extracted [${fi}]: ${fileDur}ms, ok=${parsed !== undefined}`);
       if (fileDur > 2000) {
         logger.warn(
           `[scope-resolution] SLOW extract: ${file.path} took ${fileDur}ms (${file.content.length} bytes)`,
@@ -232,14 +236,17 @@ export function runScopeResolution(
         continue;
       }
     }
+    if (fi < 3) {
+      logger.info(`[scope-resolution] → populateOwners [${fi}]: ${file.path}`);
+    }
     const tOwn = Date.now();
     provider.populateOwners(parsed);
     const ownDur = Date.now() - tOwn;
-    if (ownDur > 1000) {
-      logger.warn(`[scope-resolution] SLOW populateOwners: ${file.path} took ${ownDur}ms`);
+    if (fi < 3 || ownDur > 1000) {
+      logger.info(`[scope-resolution] → populateOwners [${fi}] done: ${ownDur}ms`);
     }
     parsedFiles.push(parsed);
-    if ((fi + 1) % 200 === 0 || fi < 5) {
+    if ((fi + 1) % 500 === 0 || fi < 5) {
       logger.info(
         `[scope-resolution] Phase 1 progress: ${fi + 1}/${files.length} (pre=${preExtractedHits})`,
       );
