@@ -34,8 +34,6 @@ import type { PipelinePhase, PipelineContext, PhaseResult } from './types.js';
 import { getPhaseOutput } from './types.js';
 import type { ParseOutput } from './parse.js';
 import { runCrossFileBindingPropagation } from './cross-file-impl.js';
-import { isDev } from '../utils/env.js';
-
 import { logger } from '../../logger.js';
 export interface CrossFileOutput {
   /** Number of files re-processed during cross-file propagation. */
@@ -57,17 +55,15 @@ export const crossFilePhase: PipelinePhase<CrossFileOutput> = {
       // Telemetry must run BEFORE dispose: totalBindings, fileCount, and
       // estimateMemoryBytes() all return 0 once dispose() clears the
       // internal maps.
-      if (isDev) {
-        if (bindingAccumulator.totalBindings > 0) {
-          const memKB = Math.round(bindingAccumulator.estimateMemoryBytes() / 1024);
-          logger.info(
-            `📦 BindingAccumulator: ${bindingAccumulator.totalBindings} bindings across ${bindingAccumulator.fileCount} files (~${memKB} KB)`,
-          );
-        } else if (totalFiles > 0) {
-          logger.info(
-            `📦 BindingAccumulator: EMPTY — 0 bindings across 0 files despite ${totalFiles} parsed files. If the codebase has typed bindings, this indicates an upstream regression.`,
-          );
-        }
+      if (bindingAccumulator.totalBindings > 0) {
+        const memKB = Math.round(bindingAccumulator.estimateMemoryBytes() / 1024);
+        logger.info(
+          `📦 BindingAccumulator: ${bindingAccumulator.totalBindings} bindings across ${bindingAccumulator.fileCount} files (~${memKB} KB)`,
+        );
+      } else if (totalFiles > 0) {
+        logger.info(
+          `📦 BindingAccumulator: EMPTY — 0 bindings across 0 files despite ${totalFiles} parsed files.`,
+        );
       }
 
       const filesReprocessed = await runCrossFileBindingPropagation(

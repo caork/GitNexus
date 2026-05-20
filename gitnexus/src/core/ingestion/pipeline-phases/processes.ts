@@ -17,8 +17,6 @@ import type { ToolsOutput } from './tools.js';
 import type { StructureOutput } from './structure.js';
 import { processProcesses, type ProcessDetectionResult } from '../process-processor.js';
 import { generateId } from '../../../lib/utils.js';
-import { isDev } from '../utils/env.js';
-
 import { logger } from '../../logger.js';
 export interface ProcessesOutput {
   processResult: ProcessDetectionResult;
@@ -67,11 +65,9 @@ export const processesPhase: PipelinePhase<ProcessesOutput> = {
       { maxProcesses: dynamicMaxProcesses, minSteps: 3 },
     );
 
-    if (isDev) {
-      logger.info(
-        `🔄 Process detection: ${processResult.stats.totalProcesses} processes found (${processResult.stats.crossCommunityCount} cross-community)`,
-      );
-    }
+    logger.info(
+      `🔄 Process detection: ${processResult.stats.totalProcesses} processes found (${processResult.stats.crossCommunityCount} cross-community, ${processResult.stats.entryPointsFound} entry points, avg ${processResult.stats.avgStepCount} steps)`,
+    );
 
     processResult.processes.forEach((proc) => {
       ctx.graph.addNode({
@@ -167,7 +163,7 @@ export const processesPhase: PipelinePhase<ProcessesOutput> = {
           }
         }
       }
-      if (isDev && linked > 0) {
+      if (linked > 0) {
         logger.info(`🔗 Linked ${linked} Route/Tool nodes to execution flows`);
       }
     }

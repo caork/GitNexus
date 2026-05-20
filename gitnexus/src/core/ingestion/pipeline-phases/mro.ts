@@ -13,8 +13,6 @@ import type { PipelinePhase, PipelineContext, PhaseResult } from './types.js';
 import { getPhaseOutput } from './types.js';
 import type { StructureOutput } from './structure.js';
 import { computeMRO } from '../mro-processor.js';
-import { isDev } from '../utils/env.js';
-
 import { logger } from '../../logger.js';
 export interface MROOutput {
   entries: number;
@@ -42,7 +40,7 @@ export const mroPhase: PipelinePhase<MROOutput> = {
 
     const mroResult = computeMRO(ctx.graph);
 
-    if (isDev && mroResult.entries.length > 0) {
+    if (mroResult.entries.length > 0) {
       logger.info(
         `🔀 MRO: ${mroResult.entries.length} classes analyzed, ${mroResult.ambiguityCount} ambiguities, ${mroResult.overrideEdges} METHOD_OVERRIDES, ${mroResult.methodImplementsEdges} METHOD_IMPLEMENTS`,
       );

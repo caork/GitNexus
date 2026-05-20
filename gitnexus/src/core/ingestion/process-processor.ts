@@ -15,8 +15,6 @@ import { KnowledgeGraph } from '../graph/types.js';
 import { CommunityMembership } from './community-processor.js';
 import { calculateEntryPointScore, isTestFile } from './entry-point-scoring.js';
 import { SupportedLanguages } from 'gitnexus-shared';
-import { isDev } from './utils/env.js';
-
 import { logger } from '../logger.js';
 // ============================================================================
 // CONFIGURATION
@@ -92,19 +90,28 @@ export const processProcesses = async (
   const membershipMap = new Map<string, string>();
   memberships.forEach((m) => membershipMap.set(m.nodeId, m.communityId));
 
+  let stepStart = Date.now();
   const callsEdges = buildCallsGraph(knowledgeGraph);
   const reverseCallsEdges = buildReverseCallsGraph(knowledgeGraph);
   const nodeMap = new Map<string, GraphNode>();
   for (const n of knowledgeGraph.iterNodes()) nodeMap.set(n.id, n);
+  logger.info(
+    `[processes] Adjacency lists built in ${Date.now() - stepStart}ms (${callsEdges.size} sources, ${reverseCallsEdges.size} targets, ${nodeMap.size} nodes)`,
+  );
 
   // Step 1: Find entry points (functions that call others but have few callers)
+  stepStart = Date.now();
   const entryPoints = findEntryPoints(knowledgeGraph, reverseCallsEdges, callsEdges);
+  logger.info(
+    `[processes] Entry points found in ${Date.now() - stepStart}ms: ${entryPoints.length} candidates`,
+  );
 
   onProgress?.(`Found ${entryPoints.length} entry points, tracing flows...`, 20);
 
   onProgress?.(`Found ${entryPoints.length} entry points, tracing flows...`, 20);
 
   // Step 2: Trace processes from each entry point
+  stepStart = Date.now();
   const allTraces: string[][] = [];
 
   for (let i = 0; i < entryPoints.length && allTraces.length < cfg.maxProcesses * 2; i++) {
@@ -121,14 +128,25 @@ export const processProcesses = async (
       );
     }
   }
+  logger.info(
+    `[processes] Tracing done in ${Date.now() - stepStart}ms: ${allTraces.length} raw traces from ${entryPoints.length} entry points`,
+  );
 
   onProgress?.(`Found ${allTraces.length} traces, deduplicating...`, 60);
 
   // Step 3: Deduplicate similar traces (subset removal)
+  stepStart = Date.now();
   const uniqueTraces = deduplicateTraces(allTraces);
+  logger.info(
+    `[processes] Subset dedup in ${Date.now() - stepStart}ms: ${allTraces.length} → ${uniqueTraces.length}`,
+  );
 
   // Step 3b: Deduplicate by entry+terminal pair (keep longest path per pair)
+  stepStart = Date.now();
   const endpointDeduped = deduplicateByEndpoints(uniqueTraces);
+  logger.info(
+    `[processes] Endpoint dedup in ${Date.now() - stepStart}ms: ${uniqueTraces.length} → ${endpointDeduped.length}`,
+  );
 
   onProgress?.(
     `Deduped ${uniqueTraces.length} → ${endpointDeduped.length} unique endpoint pairs`,
@@ -323,9 +341,9 @@ const findEntryPoints = (
   // Sort by score descending and return top candidates
   const sorted = entryPointCandidates.sort((a, b) => b.score - a.score);
 
-  // DEBUG: Log top candidates with new scoring details
-  if (sorted.length > 0 && isDev) {
-    logger.info(`[Process] Top 10 entry point candidates (new scoring):`);
+  // Log top candidates with scoring details
+  if (sorted.length > 0) {
+    logger.info(`[Process] Top 10 entry point candidates (${sorted.length} total):`);
     sorted.slice(0, 10).forEach((c, i) => {
       const node = graph.getNode(c.id);
       const exported = node?.properties.isExported ? '✓' : '✗';

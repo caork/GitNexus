@@ -200,7 +200,7 @@ export async function runChunkedParseAndResolve(
 
   const numChunks = chunks.length;
 
-  if (isDev) {
+  {
     const totalMB = parseableScanned.reduce((s, f) => s + f.size, 0) / (1024 * 1024);
     logger.info(
       `📂 Scan: ${totalFiles} paths, ${totalParseable} parseable (${totalMB.toFixed(0)}MB), ${numChunks} chunks @ ${CHUNK_BYTE_BUDGET / (1024 * 1024)}MB budget`,
@@ -532,7 +532,7 @@ export async function runChunkedParseAndResolve(
       astCache.clear();
     }
 
-    if (isDev && parseCache && (chunkCacheHits > 0 || chunkCacheMisses > 0)) {
+    if (parseCache && (chunkCacheHits > 0 || chunkCacheMisses > 0)) {
       logger.info(
         `📦 parse-cache summary: ${chunkCacheHits} chunk hit(s), ${chunkCacheMisses} miss(es) across ${numChunks} chunk(s)`,
       );
@@ -651,7 +651,7 @@ export async function runChunkedParseAndResolve(
     }
 
     // Log resolution cache stats
-    if (isDev) {
+    {
       const rcStats = ctx.getStats();
       const total = rcStats.cacheHits + rcStats.cacheMisses;
       const hitRate = total > 0 ? ((rcStats.cacheHits / total) * 100).toFixed(1) : '0';
@@ -670,24 +670,22 @@ export async function runChunkedParseAndResolve(
     try {
       bindingAccumulator.finalize();
       const enriched = enrichExportedTypeMap(bindingAccumulator, graph, exportedTypeMap);
-      if (isDev && enriched > 0) {
+      if (enriched > 0) {
         logger.info(
           `🔗 Worker TypeEnv enrichment: ${enriched} fixpoint-inferred exports added to ExportedTypeMap`,
         );
       }
     } catch (enrichErr) {
-      if (isDev) {
-        logger.warn(
-          { err: (enrichErr as Error).message },
-          'Post-fallback finalize/enrich failed during cleanup:',
-        );
-      }
+      logger.warn(
+        { err: (enrichErr as Error).message },
+        'Post-fallback finalize/enrich failed during cleanup:',
+      );
     }
   }
 
   if (!hasSynthesized) {
     const synthesized = synthesizeWildcardImportBindings(graph, ctx);
-    if (isDev && synthesized > 0) {
+    if (synthesized > 0) {
       logger.info(
         `🔗 Synthesized ${synthesized} additional wildcard import bindings (Go/Ruby/C++/Swift/Python)`,
       );

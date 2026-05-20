@@ -13,8 +13,6 @@
  */
 
 import type { PipelinePhase, PipelineContext, PhaseResult } from './types.js';
-import { isDev } from '../utils/env.js';
-
 import { logger } from '../../logger.js';
 /**
  * Validate that the phases form a valid dependency graph (no cycles, all deps present).
@@ -176,9 +174,7 @@ export async function runPipeline(
   for (const phase of sorted) {
     const start = Date.now();
 
-    if (isDev) {
-      logger.info(`▶ Phase: ${phase.name}`);
-    }
+    logger.info(`▶ Phase: ${phase.name}`);
 
     // Only expose declared dependencies — prevents hidden coupling to undeclared phases.
     const declaredDeps = new Map<string, PhaseResult<unknown>>();
@@ -220,9 +216,7 @@ export async function runPipeline(
       durationMs,
     });
 
-    if (isDev) {
-      logger.info(`✓ Phase: ${phase.name} (${durationMs}ms)`);
-    }
+    logger.info(`✓ Phase: ${phase.name} (${durationMs}ms)`);
   }
 
   return results;

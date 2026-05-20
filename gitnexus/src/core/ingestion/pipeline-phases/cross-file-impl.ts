@@ -26,7 +26,6 @@ import { isLanguageAvailable } from '../../tree-sitter/parser-loader.js';
 import { isRegistryPrimary } from '../registry-primary-flag.js';
 import { topologicalLevelSort } from '../utils/graph-sort.js';
 import type { KnowledgeGraph } from '../../graph/types.js';
-import { isDev } from '../utils/env.js';
 import type Parser from 'tree-sitter';
 
 import { logger } from '../../logger.js';
@@ -66,7 +65,7 @@ export async function runCrossFileBindingPropagation(
 
   const { levels, cycleCount } = topologicalLevelSort(ctx.importMap);
 
-  if (isDev && cycleCount > 0) {
+  if (cycleCount > 0) {
     logger.info(`🔄 ${cycleCount} files in import cycles (processed last in undefined order)`);
   }
 
@@ -94,11 +93,9 @@ export async function runCrossFileBindingPropagation(
 
   const gapRatio = totalFiles > 0 ? filesWithGaps / totalFiles : 0;
   if (gapRatio < CROSS_FILE_SKIP_THRESHOLD && filesWithGaps < gapThreshold) {
-    if (isDev) {
-      logger.info(
-        `⏭️ Cross-file re-resolution skipped (${filesWithGaps}/${totalFiles} files, ${(gapRatio * 100).toFixed(1)}% < ${CROSS_FILE_SKIP_THRESHOLD * 100}% threshold)`,
-      );
-    }
+    logger.info(
+      `⏭️ Cross-file re-resolution skipped (${filesWithGaps}/${totalFiles} files, ${(gapRatio * 100).toFixed(1)}% < ${CROSS_FILE_SKIP_THRESHOLD * 100}% threshold)`,
+    );
     return 0;
   }
 
@@ -249,23 +246,20 @@ export async function runCrossFileBindingPropagation(
     }
 
     if (crossFileResolved >= MAX_CROSS_FILE_REPROCESS) {
-      if (isDev)
-        logger.info(`⚠️ Cross-file re-resolution capped at ${MAX_CROSS_FILE_REPROCESS} files`);
+      logger.info(`⚠️ Cross-file re-resolution capped at ${MAX_CROSS_FILE_REPROCESS} files`);
       break;
     }
   }
 
   astCache.clear();
 
-  if (isDev) {
-    const elapsed = Date.now() - crossFileStart;
-    const totalElapsed = Date.now() - pipelineStart;
-    const reResolutionPct = totalElapsed > 0 ? ((elapsed / totalElapsed) * 100).toFixed(1) : '0';
-    logger.info(
-      `🔗 Cross-file re-resolution: ${crossFileResolved} candidates re-processed` +
-        ` in ${elapsed}ms (${reResolutionPct}% of total ingestion time so far)`,
-    );
-  }
+  const elapsed = Date.now() - crossFileStart;
+  const totalElapsed = Date.now() - pipelineStart;
+  const reResolutionPct = totalElapsed > 0 ? ((elapsed / totalElapsed) * 100).toFixed(1) : '0';
+  logger.info(
+    `🔗 Cross-file re-resolution: ${crossFileResolved} candidates re-processed` +
+      ` in ${elapsed}ms (${reResolutionPct}% of total ingestion time so far)`,
+  );
 
   return crossFileResolved;
 }

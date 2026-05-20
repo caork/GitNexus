@@ -13,8 +13,6 @@ import type { PipelinePhase, PipelineContext, PhaseResult } from './types.js';
 import { getPhaseOutput } from './types.js';
 import type { StructureOutput } from './structure.js';
 import { processCommunities, type CommunityDetectionResult } from '../community-processor.js';
-import { isDev } from '../utils/env.js';
-
 import { logger } from '../../logger.js';
 export interface CommunitiesOutput {
   communityResult: CommunityDetectionResult;
@@ -47,11 +45,9 @@ export const communitiesPhase: PipelinePhase<CommunitiesOutput> = {
       });
     });
 
-    if (isDev) {
-      logger.info(
-        `🏘️ Community detection: ${communityResult.stats.totalCommunities} communities found (modularity: ${communityResult.stats.modularity.toFixed(3)})`,
-      );
-    }
+    logger.info(
+      `🏘️ Community detection: ${communityResult.stats.totalCommunities} communities found, ${communityResult.stats.nodesProcessed} nodes (modularity: ${communityResult.stats.modularity.toFixed(3)})`,
+    );
 
     communityResult.communities.forEach((comm) => {
       ctx.graph.addNode({

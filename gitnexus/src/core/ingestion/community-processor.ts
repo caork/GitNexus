@@ -19,6 +19,8 @@ import { dirname, resolve } from 'node:path';
 import type { NodeLabel } from 'gitnexus-shared';
 import { KnowledgeGraph } from '../graph/types.js';
 
+import { logger } from '../logger.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 // Navigate to package root (works from both src/ and dist/)
@@ -138,8 +140,13 @@ export const processCommunities = async (
     }
   });
   const isLarge = symbolCount > 10_000;
+  logger.info(`[communities] ${symbolCount} symbols, isLarge=${isLarge}`);
 
+  const graphBuildStart = Date.now();
   const graph = buildGraphologyGraph(knowledgeGraph, isLarge);
+  logger.info(
+    `[communities] graphology graph built in ${Date.now() - graphBuildStart}ms: ${graph.order} nodes, ${graph.size} edges`,
+  );
 
   if (graph.order === 0) {
     return {
@@ -162,6 +169,10 @@ export const processCommunities = async (
   // Timeout: abort after 60s for pathological graph structures.
   const LEIDEN_TIMEOUT_MS = 60_000;
   let details: LeidenDetailedResult;
+  const leidenStart = Date.now();
+  logger.info(
+    `[communities] Starting Leiden (resolution=${isLarge ? 2.0 : 1.0}, maxIter=${isLarge ? 3 : 0}, timeout=${LEIDEN_TIMEOUT_MS}ms)...`,
+  );
   try {
     details = await Promise.race([
       Promise.resolve(
@@ -175,6 +186,9 @@ export const processCommunities = async (
         setTimeout(() => reject(new Error('Leiden timeout')), LEIDEN_TIMEOUT_MS),
       ),
     ]);
+    logger.info(
+      `[communities] Leiden finished in ${Date.now() - leidenStart}ms: ${details.count} communities, modularity=${details.modularity.toFixed(4)}`,
+    );
   } catch (e: any) {
     if (e.message === 'Leiden timeout') {
       onProgress?.('Community detection timed out, using fallback...', 60);
