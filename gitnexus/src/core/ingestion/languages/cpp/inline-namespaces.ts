@@ -44,6 +44,51 @@ interface RangeKey {
 const inlineNamespaceRangesByFile = new Map<string, Set<string>>();
 const inlineNamespaceScopeIds = new Set<ScopeId>();
 
+// ── Lazy namespace index for resolveCppQualifiedNamespaceMember ──────
+//
+// The old implementation iterated ALL parsedFiles (O(F × S)) per call.
+// For large C++ codebases (9K+ files, thousands of namespace-qualified
+// call sites), this created an O(C × F × S) bottleneck that dominated
+// Phase 4a. This index is built lazily on first call and maps each
+// namespace simple-name to the list of { parsed, scope, scopesById }
+// tuples that match. Cleared alongside inline-namespace state.
+interface NamespaceScopeEntry {
+  readonly parsed: ParsedFile;
+  readonly scope: ParsedFile['scopes'][number];
+  readonly scopesById: ReadonlyMap<ScopeId, ParsedFile['scopes'][number]>;
+}
+let cachedNsIndex: Map<string, NamespaceScopeEntry[]> | undefined;
+let cachedNsIndexKey: readonly ParsedFile[] | undefined;
+
+function ensureNamespaceIndex(
+  parsedFiles: readonly ParsedFile[],
+): Map<string, NamespaceScopeEntry[]> {
+  // Cache is keyed by reference identity of the parsedFiles array.
+  if (cachedNsIndex !== undefined && cachedNsIndexKey === parsedFiles) return cachedNsIndex;
+
+  const idx = new Map<string, NamespaceScopeEntry[]>();
+  for (const parsed of parsedFiles) {
+    const scopesById = new Map<ScopeId, (typeof parsed.scopes)[number]>();
+    for (const sc of parsed.scopes) scopesById.set(sc.id, sc);
+    for (const scope of parsed.scopes) {
+      if (scope.kind !== 'Namespace') continue;
+      const nsDef = findNamespaceDefInScope(scope);
+      if (nsDef === undefined) continue;
+      const nsName = nsDef.qualifiedName?.split('.').pop() ?? nsDef.qualifiedName ?? '';
+      if (nsName.length === 0) continue;
+      let bucket = idx.get(nsName);
+      if (bucket === undefined) {
+        bucket = [];
+        idx.set(nsName, bucket);
+      }
+      bucket.push({ parsed, scope, scopesById });
+    }
+  }
+  cachedNsIndex = idx;
+  cachedNsIndexKey = parsedFiles;
+  return idx;
+}
+
 function rangeKey(r: RangeKey): string {
   return `${r.startLine}:${r.startCol}:${r.endLine}:${r.endCol}`;
 }
@@ -64,6 +109,8 @@ export function markCppInlineNamespaceRange(filePath: string, range: RangeKey): 
 export function clearCppInlineNamespaces(): void {
   inlineNamespaceRangesByFile.clear();
   inlineNamespaceScopeIds.clear();
+  cachedNsIndex = undefined;
+  cachedNsIndexKey = undefined;
 }
 
 /** Resolve captured ranges to actual ScopeIds by matching scope ranges
@@ -108,25 +155,21 @@ export function resolveCppQualifiedNamespaceMember(
   parsedFiles: readonly ParsedFile[],
   _scopes: ScopeResolutionIndexes,
 ): SymbolDefinition | 'ambiguous' | undefined {
+  // Use the lazily-built namespace index instead of scanning all files.
+  // Previously this was O(F × S) per call — the dominant Phase 4a
+  // bottleneck for large C++ codebases.
+  const nsIndex = ensureNamespaceIndex(parsedFiles);
+  const entries = nsIndex.get(receiverName);
+  if (entries === undefined) return undefined;
+
   const allHits: SymbolDefinition[] = [];
   const seenNodeId = new Set<string>();
-  for (const parsed of parsedFiles) {
-    const scopesById = new Map<ScopeId, (typeof parsed.scopes)[number]>();
-    for (const sc of parsed.scopes) scopesById.set(sc.id, sc);
-    for (const scope of parsed.scopes) {
-      if (scope.kind !== 'Namespace') continue;
-      const nsDef = findNamespaceDefInScope(scope);
-      if (nsDef === undefined) continue;
-      const nsName = nsDef.qualifiedName?.split('.').pop() ?? nsDef.qualifiedName ?? '';
-      if (nsName !== receiverName) continue;
-      // Found a matching namespace scope in this file. Collect ALL
-      // members transitively through any inline-namespace children.
-      const hits = findMemberInNamespaceTransitive(scope, scopesById, memberName);
-      for (const hit of hits) {
-        if (seenNodeId.has(hit.nodeId)) continue;
-        seenNodeId.add(hit.nodeId);
-        allHits.push(hit);
-      }
+  for (const { scope, scopesById } of entries) {
+    const hits = findMemberInNamespaceTransitive(scope, scopesById, memberName);
+    for (const hit of hits) {
+      if (seenNodeId.has(hit.nodeId)) continue;
+      seenNodeId.add(hit.nodeId);
+      allHits.push(hit);
     }
   }
   if (allHits.length === 0) return undefined;
