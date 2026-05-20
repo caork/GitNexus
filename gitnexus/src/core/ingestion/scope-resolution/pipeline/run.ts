@@ -189,6 +189,7 @@ export function runScopeResolution(
   };
 
   // ── Phase 1: extract each file → ParsedFile ────────────────────────────
+  const tPhase1 = Date.now();
   const parsedFiles: ParsedFile[] = [];
   let filesSkipped = 0;
   const treeCache = input.treeCache;
@@ -224,6 +225,9 @@ export function runScopeResolution(
     logger.warn(`[scope-resolution prof] pre-extracted hits: ${preExtractedHits}/${files.length}`);
   }
   provider.populateWorkspaceOwners?.(parsedFiles, { fileContents: getFileContents() });
+  logger.info(
+    `[scope-resolution] Phase 1 extract: ${parsedFiles.length} files (${filesSkipped} skipped, ${preExtractedHits} pre-extracted) in ${Date.now() - tPhase1}ms`,
+  );
 
   // Reconcile scope-resolution's ownership view into the SemanticModel.
   // See `reconcile-ownership.ts` for the full rationale (Contract
@@ -253,6 +257,7 @@ export function runScopeResolution(
   const tExtract = PROF ? process.hrtime.bigint() : 0n;
 
   // ── Phase 2: finalize → ScopeResolutionIndexes ─────────────────────────
+  const tPhase2 = Date.now();
   const allFilePaths = new Set(parsedFiles.map((f) => f.filePath));
   const nodeLookup = buildGraphNodeLookup(graph);
 
@@ -301,6 +306,7 @@ export function runScopeResolution(
     });
   }
 
+  logger.info(`[scope-resolution] Phase 2 finalize+MRO in ${Date.now() - tPhase2}ms`);
   const tFinalize = PROF ? process.hrtime.bigint() : 0n;
 
   // Cross-package namespace typeBinding mirroring. Runs before
@@ -325,6 +331,7 @@ export function runScopeResolution(
       treeCache,
     });
   }
+  logger.info(`[scope-resolution] Phase 2b propagate in ${Date.now() - tPhase2}ms (cumulative)`);
   const tPropagate = PROF ? process.hrtime.bigint() : 0n;
 
   // Opt-in I8 invariant guard. Runs once after all post-finalize hooks
@@ -336,6 +343,7 @@ export function runScopeResolution(
   validateBindingsImmutability(indexes, onWarn);
 
   // ── Phase 3: resolve references via Registry.lookup ────────────────────
+  const tPhase3 = Date.now();
   const registryProviders: RegistryProviders = {
     arityCompatibility: provider.arityCompatibility,
   };
@@ -343,10 +351,15 @@ export function runScopeResolution(
     scopes: indexes,
     providers: registryProviders,
   });
+  logger.info(
+    `[scope-resolution] Phase 3 resolve: ${resolveStats.sitesProcessed} sites, ${resolveStats.referencesEmitted} refs, ${resolveStats.unresolved} unresolved in ${Date.now() - tPhase3}ms`,
+  );
   const tResolve = PROF ? process.hrtime.bigint() : 0n;
 
   // ── Phase 4: emit graph edges (LOAD-BEARING ORDER — see I1) ────────────
+  const tPhase4 = Date.now();
   const handledSites = new Set<string>(preEmittedInheritanceSites);
+  let tSub = Date.now();
   const receiverExtras = emitReceiverBoundCalls(
     graph,
     indexes,
@@ -357,6 +370,10 @@ export function runScopeResolution(
     workspaceIndex,
     readonlyModel,
   );
+  logger.info(
+    `[scope-resolution] Phase 4a receiver-bound: ${receiverExtras} edges in ${Date.now() - tSub}ms`,
+  );
+  tSub = Date.now();
   const unresolvedReceiverExtras =
     provider.emitUnresolvedReceiverEdges !== undefined
       ? provider.emitUnresolvedReceiverEdges(
@@ -368,6 +385,10 @@ export function runScopeResolution(
           readonlyModel,
         )
       : 0;
+  logger.info(
+    `[scope-resolution] Phase 4b unresolved-receiver: ${unresolvedReceiverExtras} edges in ${Date.now() - tSub}ms`,
+  );
+  tSub = Date.now();
   const freeCallExtras = emitFreeCallFallback(
     graph,
     indexes,
@@ -386,6 +407,10 @@ export function runScopeResolution(
       constraintCompatibility: provider.constraintCompatibility,
     },
   );
+  logger.info(
+    `[scope-resolution] Phase 4c free-call: ${freeCallExtras} edges in ${Date.now() - tSub}ms`,
+  );
+  tSub = Date.now();
   const { emitted, skipped } = emitReferencesViaLookup(
     graph,
     indexes,
@@ -393,11 +418,18 @@ export function runScopeResolution(
     nodeLookup,
     handledSites,
   );
+  logger.info(
+    `[scope-resolution] Phase 4d ref-lookup: ${emitted} emitted, ${skipped} skipped in ${Date.now() - tSub}ms`,
+  );
+  tSub = Date.now();
   const importsEmitted = emitImportEdges(
     graph,
     indexes.imports,
     indexes.scopeTree,
     provider.importEdgeReason,
+  );
+  logger.info(
+    `[scope-resolution] Phase 4e imports: ${importsEmitted} in ${Date.now() - tSub}ms (Phase 4 total: ${Date.now() - tPhase4}ms)`,
   );
 
   if (PROF) {

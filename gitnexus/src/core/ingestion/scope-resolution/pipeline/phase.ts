@@ -36,7 +36,7 @@ import { SupportedLanguages, getLanguageFromFilename } from 'gitnexus-shared';
 import { readFileContents } from '../../filesystem-walker.js';
 import { runScopeResolution } from './run.js';
 import { SCOPE_RESOLVERS } from './registry.js';
-import { isDev, isSemanticModelValidatorEnabled } from '../../utils/env.js';
+import { isSemanticModelValidatorEnabled } from '../../utils/env.js';
 
 import { logger } from '../../../logger.js';
 export interface ScopeResolutionOutput {
@@ -175,11 +175,9 @@ export const scopeResolutionPhase: PipelinePhase<ScopeResolutionOutput> = {
         referenceEdgesEmitted: stats.referenceEdgesEmitted,
       });
 
-      if (isDev) {
-        logger.info(
-          `[scope-resolution:${lang}] ${stats.filesProcessed} files → ${stats.importsEmitted} IMPORTS + ${stats.referenceEdgesEmitted} reference edges (${stats.resolve.unresolved} unresolved sites, ${stats.referenceSkipped} skipped)`,
-        );
-      }
+      logger.info(
+        `[scope-resolution:${lang}] ${stats.filesProcessed} files → ${stats.importsEmitted} IMPORTS + ${stats.referenceEdgesEmitted} reference edges (${stats.resolve.unresolved} unresolved sites, ${stats.referenceSkipped} skipped)`,
+      );
     }
 
     // Dispose the cross-phase Tree cache — scope-resolution is the
