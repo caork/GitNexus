@@ -195,14 +195,15 @@ export function runScopeResolution(
   const treeCache = input.treeCache;
   const preExtracted = input.preExtractedParsedFiles;
   let preExtractedHits = 0;
-  logger.info(
-    `[scope-resolution] Phase 1 loop start: ${files.length} files, preExtracted=${preExtracted !== undefined ? preExtracted.size : 'none'}, treeCache=${treeCache ? 'yes' : 'no'}`,
+  // Use stderr for sync diagnostic writes — pino's stdout is async
+  // when piped, so sync CPU loops never flush stdout logs.
+  const diag = (msg: string) => process.stderr.write(`[DIAG] ${msg}\n`);
+  diag(
+    `Phase 1 loop start: ${files.length} files, preExtracted=${preExtracted !== undefined ? preExtracted.size : 'none'}, treeCache=${treeCache ? 'yes' : 'no'}`,
   );
+  let freshCount = 0;
   for (let fi = 0; fi < files.length; fi++) {
     const file = files[fi];
-    if (fi < 3 || fi % 500 === 0) {
-      logger.info(`[scope-resolution] Phase 1 file [${fi}/${files.length}]: ${file.path}`);
-    }
     let parsed: ParsedFile | undefined;
     // Fast path: a worker (during the parse phase) already produced a
     // ParsedFile for this file via `extractParsedFile`. Reuse it
@@ -212,9 +213,12 @@ export function runScopeResolution(
       if (parsed !== undefined) preExtractedHits++;
     }
     if (parsed === undefined) {
-      logger.info(
-        `[scope-resolution] fresh-extract [${fi}/${files.length}]: ${file.path} (${file.content.length} bytes, cached=${treeCache?.get(file.path) !== undefined})`,
-      );
+      freshCount++;
+      if (freshCount <= 5 || freshCount % 100 === 0) {
+        diag(
+          `fresh-extract [${fi}/${files.length}] #${freshCount}: ${file.path} (${file.content.length} bytes)`,
+        );
+      }
       const tFile = Date.now();
       const cachedTree = treeCache?.get(file.path);
       parsed = extractParsedFile(
@@ -225,30 +229,19 @@ export function runScopeResolution(
         cachedTree,
       );
       const fileDur = Date.now() - tFile;
-      logger.info(`[scope-resolution] extracted [${fi}]: ${fileDur}ms, ok=${parsed !== undefined}`);
       if (fileDur > 2000) {
-        logger.warn(
-          `[scope-resolution] SLOW extract: ${file.path} took ${fileDur}ms (${file.content.length} bytes)`,
-        );
+        diag(`SLOW extract: ${file.path} took ${fileDur}ms (${file.content.length} bytes)`);
       }
       if (parsed === undefined) {
         filesSkipped++;
         continue;
       }
     }
-    if (fi < 3) {
-      logger.info(`[scope-resolution] → populateOwners [${fi}]: ${file.path}`);
-    }
-    const tOwn = Date.now();
     provider.populateOwners(parsed);
-    const ownDur = Date.now() - tOwn;
-    if (fi < 3 || ownDur > 1000) {
-      logger.info(`[scope-resolution] → populateOwners [${fi}] done: ${ownDur}ms`);
-    }
     parsedFiles.push(parsed);
-    if ((fi + 1) % 500 === 0 || fi < 5) {
-      logger.info(
-        `[scope-resolution] Phase 1 progress: ${fi + 1}/${files.length} (pre=${preExtractedHits})`,
+    if ((fi + 1) % 1000 === 0) {
+      diag(
+        `Phase 1 progress: ${fi + 1}/${files.length} (pre=${preExtractedHits}, fresh=${freshCount}, elapsed=${Date.now() - tPhase1}ms)`,
       );
     }
   }
