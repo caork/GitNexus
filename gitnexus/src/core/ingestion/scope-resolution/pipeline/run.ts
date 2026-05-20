@@ -248,14 +248,13 @@ export function runScopeResolution(
   if (PROF && preExtracted !== undefined) {
     logger.warn(`[scope-resolution prof] pre-extracted hits: ${preExtractedHits}/${files.length}`);
   }
-  logger.info(
-    `[scope-resolution] Phase 1 extract loop done: ${parsedFiles.length} files (${filesSkipped} skipped, ${preExtractedHits} pre-extracted) in ${Date.now() - tPhase1}ms`,
+  diag(
+    `Phase 1 extract loop done: ${parsedFiles.length} files (${filesSkipped} skipped, ${preExtractedHits} pre-extracted) in ${Date.now() - tPhase1}ms`,
   );
+  diag(`Phase 1 populateWorkspaceOwners starting (${parsedFiles.length} files)...`);
   const tWsOwners = Date.now();
   provider.populateWorkspaceOwners?.(parsedFiles, { fileContents: getFileContents() });
-  logger.info(
-    `[scope-resolution] Phase 1 populateWorkspaceOwners in ${Date.now() - tWsOwners}ms (Phase 1 total: ${Date.now() - tPhase1}ms)`,
-  );
+  diag(`Phase 1 populateWorkspaceOwners done in ${Date.now() - tWsOwners}ms`);
 
   // Reconcile scope-resolution's ownership view into the SemanticModel.
   // See `reconcile-ownership.ts` for the full rationale (Contract
@@ -267,7 +266,10 @@ export function runScopeResolution(
   // writes are expected — downstream passes consume `readonlyModel`
   // (narrowed to `SemanticModel`) so accidental writes would surface
   // as type errors.
+  diag(`reconcileOwnership starting (${parsedFiles.length} files)...`);
+  const tReconcile = Date.now();
   reconcileOwnership(parsedFiles, input.model);
+  diag(`reconcileOwnership done in ${Date.now() - tReconcile}ms`);
   validateOwnershipParity(parsedFiles, input.model, onWarn);
   const readonlyModel: SemanticModel = input.model;
 
@@ -285,11 +287,14 @@ export function runScopeResolution(
   const tExtract = PROF ? process.hrtime.bigint() : 0n;
 
   // ── Phase 2: finalize → ScopeResolutionIndexes ─────────────────────────
+  diag(`Phase 2 starting: ${parsedFiles.length} parsed files`);
   const tPhase2 = Date.now();
   const allFilePaths = new Set(parsedFiles.map((f) => f.filePath));
   const nodeLookup = buildGraphNodeLookup(graph);
+  diag(`Phase 2 nodeLookup+filePaths built in ${Date.now() - tPhase2}ms`);
 
   const resolutionConfig = input.resolutionConfig;
+  const tFinalize2 = Date.now();
   const finalized = finalizeScopeModel(parsedFiles, {
     hooks: {
       resolveImportTarget: (targetRaw, fromFile) =>
@@ -300,8 +305,13 @@ export function runScopeResolution(
         provider.mergeBindings(existing, incoming, scopeId),
     },
   });
+  diag(`Phase 2 finalizeScopeModel done in ${Date.now() - tFinalize2}ms`);
+  const tPre = Date.now();
   const preEmittedInheritanceSites = preEmitInheritanceEdges(graph, finalized, nodeLookup);
+  diag(`Phase 2 preEmitInheritanceEdges done in ${Date.now() - tPre}ms`);
+  const tMro = Date.now();
   const mroByClassDefId = provider.buildMro(graph, parsedFiles, nodeLookup);
+  diag(`Phase 2 buildMro done in ${Date.now() - tMro}ms`);
   const extendsOnlyMroByClassDefId = provider.buildExtendsOnlyMro?.(graph, parsedFiles, nodeLookup);
 
   // Replace the empty MethodDispatchIndex that finalizeScopeModel
