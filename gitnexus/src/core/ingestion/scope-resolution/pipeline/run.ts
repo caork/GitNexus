@@ -195,15 +195,11 @@ export function runScopeResolution(
   const treeCache = input.treeCache;
   const preExtracted = input.preExtractedParsedFiles;
   let preExtractedHits = 0;
-  // Use stderr for sync diagnostic writes — pino's stdout is async
-  // when piped, so sync CPU loops never flush stdout logs.
-  const diag = (msg: string) => process.stderr.write(`[DIAG] ${msg}\n`);
-  diag(
-    `Phase 1 loop start: ${files.length} files, preExtracted=${preExtracted !== undefined ? preExtracted.size : 'none'}, treeCache=${treeCache ? 'yes' : 'no'}`,
-  );
-  let freshCount = 0;
   for (let fi = 0; fi < files.length; fi++) {
     const file = files[fi];
+    if (fi % 500 === 0) {
+      logger.info(`[scope-resolution] Phase 1 file [${fi}/${files.length}]: ${file.path}`);
+    }
     let parsed: ParsedFile | undefined;
     // Fast path: a worker (during the parse phase) already produced a
     // ParsedFile for this file via `extractParsedFile`. Reuse it
@@ -213,12 +209,9 @@ export function runScopeResolution(
       if (parsed !== undefined) preExtractedHits++;
     }
     if (parsed === undefined) {
-      freshCount++;
-      if (freshCount <= 5 || freshCount % 100 === 0) {
-        diag(
-          `fresh-extract [${fi}/${files.length}] #${freshCount}: ${file.path} (${file.content.length} bytes)`,
-        );
-      }
+      logger.info(
+        `[scope-resolution] extracting [${fi}/${files.length}]: ${file.path} (${file.content.length} bytes)`,
+      );
       const tFile = Date.now();
       const cachedTree = treeCache?.get(file.path);
       parsed = extractParsedFile(
@@ -230,31 +223,39 @@ export function runScopeResolution(
       );
       const fileDur = Date.now() - tFile;
       if (fileDur > 2000) {
-        diag(`SLOW extract: ${file.path} took ${fileDur}ms (${file.content.length} bytes)`);
+        logger.warn(
+          `[scope-resolution] SLOW extract: ${file.path} took ${fileDur}ms (${file.content.length} bytes)`,
+        );
       }
       if (parsed === undefined) {
         filesSkipped++;
         continue;
       }
     }
+    const tOwn = Date.now();
     provider.populateOwners(parsed);
+    const ownDur = Date.now() - tOwn;
+    if (ownDur > 1000) {
+      logger.warn(`[scope-resolution] SLOW populateOwners: ${file.path} took ${ownDur}ms`);
+    }
     parsedFiles.push(parsed);
-    if ((fi + 1) % 1000 === 0) {
-      diag(
-        `Phase 1 progress: ${fi + 1}/${files.length} (pre=${preExtractedHits}, fresh=${freshCount}, elapsed=${Date.now() - tPhase1}ms)`,
+    if ((fi + 1) % 200 === 0 || fi < 5) {
+      logger.info(
+        `[scope-resolution] Phase 1 progress: ${fi + 1}/${files.length} (pre=${preExtractedHits})`,
       );
     }
   }
   if (PROF && preExtracted !== undefined) {
     logger.warn(`[scope-resolution prof] pre-extracted hits: ${preExtractedHits}/${files.length}`);
   }
-  diag(
-    `Phase 1 extract loop done: ${parsedFiles.length} files (${filesSkipped} skipped, ${preExtractedHits} pre-extracted) in ${Date.now() - tPhase1}ms`,
+  logger.info(
+    `[scope-resolution] Phase 1 extract loop done: ${parsedFiles.length} files (${filesSkipped} skipped, ${preExtractedHits} pre-extracted) in ${Date.now() - tPhase1}ms`,
   );
-  diag(`Phase 1 populateWorkspaceOwners starting (${parsedFiles.length} files)...`);
   const tWsOwners = Date.now();
   provider.populateWorkspaceOwners?.(parsedFiles, { fileContents: getFileContents() });
-  diag(`Phase 1 populateWorkspaceOwners done in ${Date.now() - tWsOwners}ms`);
+  logger.info(
+    `[scope-resolution] Phase 1 populateWorkspaceOwners in ${Date.now() - tWsOwners}ms (Phase 1 total: ${Date.now() - tPhase1}ms)`,
+  );
 
   // Reconcile scope-resolution's ownership view into the SemanticModel.
   // See `reconcile-ownership.ts` for the full rationale (Contract
@@ -266,10 +267,7 @@ export function runScopeResolution(
   // writes are expected — downstream passes consume `readonlyModel`
   // (narrowed to `SemanticModel`) so accidental writes would surface
   // as type errors.
-  diag(`reconcileOwnership starting (${parsedFiles.length} files)...`);
-  const tReconcile = Date.now();
   reconcileOwnership(parsedFiles, input.model);
-  diag(`reconcileOwnership done in ${Date.now() - tReconcile}ms`);
   validateOwnershipParity(parsedFiles, input.model, onWarn);
   const readonlyModel: SemanticModel = input.model;
 
@@ -287,14 +285,11 @@ export function runScopeResolution(
   const tExtract = PROF ? process.hrtime.bigint() : 0n;
 
   // ── Phase 2: finalize → ScopeResolutionIndexes ─────────────────────────
-  diag(`Phase 2 starting: ${parsedFiles.length} parsed files`);
   const tPhase2 = Date.now();
   const allFilePaths = new Set(parsedFiles.map((f) => f.filePath));
   const nodeLookup = buildGraphNodeLookup(graph);
-  diag(`Phase 2 nodeLookup+filePaths built in ${Date.now() - tPhase2}ms`);
 
   const resolutionConfig = input.resolutionConfig;
-  const tFinalize2 = Date.now();
   const finalized = finalizeScopeModel(parsedFiles, {
     hooks: {
       resolveImportTarget: (targetRaw, fromFile) =>
@@ -305,59 +300,64 @@ export function runScopeResolution(
         provider.mergeBindings(existing, incoming, scopeId),
     },
   });
-  diag(`Phase 2 finalizeScopeModel done in ${Date.now() - tFinalize2}ms`);
-  const tPre = Date.now();
   const preEmittedInheritanceSites = preEmitInheritanceEdges(graph, finalized, nodeLookup);
-  diag(`Phase 2 preEmitInheritanceEdges done in ${Date.now() - tPre}ms`);
-  const tMro = Date.now();
   const mroByClassDefId = provider.buildMro(graph, parsedFiles, nodeLookup);
-  diag(`Phase 2 buildMro done in ${Date.now() - tMro}ms`);
-  let tStep = Date.now();
   const extendsOnlyMroByClassDefId = provider.buildExtendsOnlyMro?.(graph, parsedFiles, nodeLookup);
-  diag(`Phase 2 buildExtendsOnlyMro done in ${Date.now() - tStep}ms`);
 
-  tStep = Date.now();
+  // Replace the empty MethodDispatchIndex that finalizeScopeModel
+  // builds by design with the populated one derived from the
+  // language's MRO. Spread produces a fresh `ScopeResolutionIndexes`
+  // instead of mutating the finalized result through an `as` cast —
+  // downstream passes get an object whose readonly guarantees match
+  // the type system.
   const indexes = {
     ...finalized,
     methodDispatch: buildPopulatedMethodDispatch(mroByClassDefId, extendsOnlyMroByClassDefId),
   };
-  diag(`Phase 2 buildPopulatedMethodDispatch done in ${Date.now() - tStep}ms`);
 
-  tStep = Date.now();
+  // Build the workspace resolution index ONCE — scope-valued lookups
+  // (`classScopeByDefId`, `moduleScopeByFile`) that `SemanticModel`
+  // cannot carry. Must run AFTER `populateOwners` (so owned defs are
+  // attributed correctly) and AFTER finalize (so module-scope
+  // bindings are available).
   const workspaceIndex = buildWorkspaceResolutionIndex(parsedFiles);
-  diag(`Phase 2 buildWorkspaceResolutionIndex done in ${Date.now() - tStep}ms`);
 
+  // Cross-file implicit-namespace visibility (C#). Must run before
+  // propagateImportedReturnTypes so the latter pass sees siblings'
+  // class bindings when chasing return-type chains across files.
+  // The hook writes to `bindingAugmentations` only; finalized
+  // `indexes.bindings` remains immutable post-finalize (I8).
   if (provider.populateNamespaceSiblings !== undefined) {
-    tStep = Date.now();
     provider.populateNamespaceSiblings(parsedFiles, indexes, {
       fileContents: getFileContents(),
       treeCache,
     });
-    diag(`Phase 2 populateNamespaceSiblings done in ${Date.now() - tStep}ms`);
   }
 
   logger.info(`[scope-resolution] Phase 2 finalize+MRO in ${Date.now() - tPhase2}ms`);
   const tFinalize = PROF ? process.hrtime.bigint() : 0n;
 
+  // Cross-package namespace typeBinding mirroring. Runs before
+  // propagateImportedReturnTypes so the SCC-ordered pass sees the
+  // mirrored bindings.
   if (provider.mirrorNamespaceTypeBindings !== undefined) {
-    tStep = Date.now();
     provider.mirrorNamespaceTypeBindings(parsedFiles, indexes, workspaceIndex);
-    diag(`Phase 2b mirrorNamespaceTypeBindings done in ${Date.now() - tStep}ms`);
   }
 
+  // Cross-file return-type propagation (Contract Invariant I3 timing:
+  // after finalize, before resolve). Split-timed separately so the
+  // SCC-ordered pass's cost is observable (PR #1050 made this O(files)
+  // with chain-follow per importer; quadratic regressions show up
+  // here, not in finalize).
   if (provider.propagatesReturnTypesAcrossImports !== false) {
-    tStep = Date.now();
     propagateImportedReturnTypes(parsedFiles, indexes, workspaceIndex);
-    diag(`Phase 2b propagateImportedReturnTypes done in ${Date.now() - tStep}ms`);
   }
 
   if (provider.populateRangeBindings !== undefined) {
-    tStep = Date.now();
     provider.populateRangeBindings(parsedFiles, indexes, {
       fileContents: getFileContents(),
       treeCache,
     });
-    diag(`Phase 2b populateRangeBindings done in ${Date.now() - tStep}ms`);
   }
   logger.info(`[scope-resolution] Phase 2b propagate in ${Date.now() - tPhase2}ms (cumulative)`);
   const tPropagate = PROF ? process.hrtime.bigint() : 0n;
@@ -371,7 +371,6 @@ export function runScopeResolution(
   validateBindingsImmutability(indexes, onWarn);
 
   // ── Phase 3: resolve references via Registry.lookup ────────────────────
-  diag(`Phase 3 resolveReferenceSites starting...`);
   const tPhase3 = Date.now();
   const registryProviders: RegistryProviders = {
     arityCompatibility: provider.arityCompatibility,
@@ -386,11 +385,9 @@ export function runScopeResolution(
   const tResolve = PROF ? process.hrtime.bigint() : 0n;
 
   // ── Phase 4: emit graph edges (LOAD-BEARING ORDER — see I1) ────────────
-  diag(`Phase 4 emit graph edges starting...`);
   const tPhase4 = Date.now();
   const handledSites = new Set<string>(preEmittedInheritanceSites);
   let tSub = Date.now();
-  diag(`Phase 4a emitReceiverBoundCalls starting...`);
   const receiverExtras = emitReceiverBoundCalls(
     graph,
     indexes,
@@ -401,12 +398,10 @@ export function runScopeResolution(
     workspaceIndex,
     readonlyModel,
   );
-  diag(`Phase 4a done: ${receiverExtras} edges in ${Date.now() - tSub}ms`);
   logger.info(
     `[scope-resolution] Phase 4a receiver-bound: ${receiverExtras} edges in ${Date.now() - tSub}ms`,
   );
   tSub = Date.now();
-  diag(`Phase 4b emitUnresolvedReceiverEdges starting...`);
   const unresolvedReceiverExtras =
     provider.emitUnresolvedReceiverEdges !== undefined
       ? provider.emitUnresolvedReceiverEdges(
@@ -418,12 +413,10 @@ export function runScopeResolution(
           readonlyModel,
         )
       : 0;
-  diag(`Phase 4b done: ${unresolvedReceiverExtras} edges in ${Date.now() - tSub}ms`);
   logger.info(
     `[scope-resolution] Phase 4b unresolved-receiver: ${unresolvedReceiverExtras} edges in ${Date.now() - tSub}ms`,
   );
   tSub = Date.now();
-  diag(`Phase 4c emitFreeCallFallback starting...`);
   const freeCallExtras = emitFreeCallFallback(
     graph,
     indexes,
@@ -442,12 +435,10 @@ export function runScopeResolution(
       constraintCompatibility: provider.constraintCompatibility,
     },
   );
-  diag(`Phase 4c done: ${freeCallExtras} edges in ${Date.now() - tSub}ms`);
   logger.info(
     `[scope-resolution] Phase 4c free-call: ${freeCallExtras} edges in ${Date.now() - tSub}ms`,
   );
   tSub = Date.now();
-  diag(`Phase 4d emitReferencesViaLookup starting...`);
   const { emitted, skipped } = emitReferencesViaLookup(
     graph,
     indexes,
@@ -455,20 +446,15 @@ export function runScopeResolution(
     nodeLookup,
     handledSites,
   );
-  diag(`Phase 4d done: ${emitted} emitted, ${skipped} skipped in ${Date.now() - tSub}ms`);
   logger.info(
     `[scope-resolution] Phase 4d ref-lookup: ${emitted} emitted, ${skipped} skipped in ${Date.now() - tSub}ms`,
   );
   tSub = Date.now();
-  diag(`Phase 4e emitImportEdges starting...`);
   const importsEmitted = emitImportEdges(
     graph,
     indexes.imports,
     indexes.scopeTree,
     provider.importEdgeReason,
-  );
-  diag(
-    `Phase 4e done: ${importsEmitted} imports in ${Date.now() - tSub}ms (Phase 4 total: ${Date.now() - tPhase4}ms)`,
   );
   logger.info(
     `[scope-resolution] Phase 4e imports: ${importsEmitted} in ${Date.now() - tSub}ms (Phase 4 total: ${Date.now() - tPhase4}ms)`,

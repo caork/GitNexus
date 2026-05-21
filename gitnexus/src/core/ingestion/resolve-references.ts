@@ -108,25 +108,8 @@ export function resolveReferenceSites(input: ResolveReferencesInput): ResolveRef
   let referencesEmitted = 0;
   let unresolved = 0;
 
-  // ── Diagnostic: count total sites + progress every 50K ──
-  const totalSites = scopes.referenceSites.length;
-  const diagInterval = Math.max(50_000, Math.floor(totalSites / 10));
-  const tResolveStart = Date.now();
-  const byOwnerSize = (scopes.defs as any).byOwner?.size ?? 'N/A';
-  process.stderr.write(
-    `[DIAG] Phase 3: ${totalSites} reference sites to resolve (defs=${scopes.defs.size}, byOwner=${byOwnerSize} owners)\n`,
-  );
-
   for (const site of scopes.referenceSites) {
     sitesProcessed++;
-
-    if (sitesProcessed % diagInterval === 0) {
-      const elapsed = Date.now() - tResolveStart;
-      const rate = Math.round(sitesProcessed / (elapsed / 1000));
-      process.stderr.write(
-        `[DIAG] Phase 3 progress: ${sitesProcessed}/${totalSites} (${referencesEmitted} refs, ${unresolved} unresolved, ${rate} sites/s, ${elapsed}ms)\n`,
-      );
-    }
 
     const resolutions = lookupForSite(site, classRegistry, methodRegistry, fieldRegistry);
     if (resolutions.length === 0) {
@@ -152,11 +135,6 @@ export function resolveReferenceSites(input: ResolveReferencesInput): ResolveRef
     }
     byTarget.push(ref);
   }
-
-  const resolveElapsed = Date.now() - tResolveStart;
-  process.stderr.write(
-    `[DIAG] Phase 3 done: ${sitesProcessed} sites in ${resolveElapsed}ms (${referencesEmitted} refs, ${unresolved} unresolved)\n`,
-  );
 
   // Freeze inner arrays so consumers don't accidentally mutate.
   const frozenBySource = new Map<ScopeId, readonly Reference[]>();
