@@ -473,6 +473,13 @@ export const runEmbeddingPipeline = async (
           });
           prevTail = overlap > 0 ? chunk.text.slice(-overlap) : '';
         }
+
+        // Release source content after chunking to avoid O(N) memory
+        // accumulation across all nodes. For 320K+ nodes the content
+        // strings alone can exceed 3 GB.
+        (node as any).content = '';
+        (node as any).methodNames = undefined;
+        (node as any).fieldNames = undefined;
       }
 
       // Embed chunk texts in sub-batches to control memory
