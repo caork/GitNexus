@@ -144,6 +144,17 @@ describe('artifact emitter (contract v0)', () => {
     expect(seen.has('parse')).toBe(true);
   });
 
+  it('rejects a non-existent repo path instead of emitting an empty graph', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gitnexus-emit-badrepo-'));
+    try {
+      await expect(
+        emitArtifacts(path.join(dir, 'does-not-exist'), path.join(dir, 'out')),
+      ).rejects.toThrow(/not a directory/);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('--no-chunks omits chunks.ndjson but still writes manifest last', async () => {
     const noChunksDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gitnexus-emit-nochunks-'));
     try {

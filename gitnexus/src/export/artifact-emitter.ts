@@ -260,6 +260,13 @@ export const emitArtifacts = async (
   const absRepoPath = path.resolve(repoPath);
   const absOutDir = path.resolve(outDir);
 
+  // Exit code 0 means "artifacts are trustworthy" — a typo'd repo path must
+  // fail loudly, not silently emit an empty graph.
+  const repoStat = await fsp.stat(absRepoPath).catch(() => null);
+  if (!repoStat?.isDirectory()) {
+    throw new Error(`repo path is not a directory: ${absRepoPath}`);
+  }
+
   await fsp.mkdir(absOutDir, { recursive: true });
   // A stale manifest from a previous run must never mark a half-written
   // artifact dir as complete — drop it before any other write.
