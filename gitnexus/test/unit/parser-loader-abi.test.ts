@@ -102,6 +102,14 @@ const SMOKE_CASES: Record<string, SmokeCase> = {
     snippet: 'int main(void) { return 0; }\n',
     rootType: 'translation_unit',
   },
+  // Ascend C piggybacks on the C++ grammar (see parser-loader.ts SOURCES);
+  // the snippet keeps the kernel-entry flavor while parsing as plain C++.
+  [SupportedLanguages.AscendC]: {
+    language: SupportedLanguages.AscendC,
+    filePath: 'kernel.asc',
+    snippet: 'inline void kernel_add() { }\n',
+    rootType: 'translation_unit',
+  },
   [SupportedLanguages.Swift]: {
     language: SupportedLanguages.Swift,
     snippet: 'class Foo { func bar() {} }\n',

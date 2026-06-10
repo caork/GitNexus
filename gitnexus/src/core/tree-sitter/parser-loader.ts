@@ -121,6 +121,12 @@ const SOURCES: Record<string, GrammarSource> = {
       'Vue parsing piggybacks on `tree-sitter-typescript`. Check the install and native binding.',
   },
 
+  [SupportedLanguages.AscendC]: {
+    load: () => _require('tree-sitter-cpp'),
+    unavailableNote:
+      'Ascend C parsing piggybacks on `tree-sitter-cpp`. Check the install and native binding.',
+  },
+
   // tree-sitter-c is a core grammar, vendored prebuild-only (under
   // gitnexus/vendor/tree-sitter-c) with GitNexus-built prebuilds for every
   // supported platform-arch — upstream ships only 4/6 (#2116) and C is a

@@ -22,4 +22,6 @@ export enum SupportedLanguages {
   Vue = 'vue',
   /** Standalone regex processor — no tree-sitter, no LanguageProvider. */
   Cobol = 'cobol',
+  /** Huawei Ascend C — C++ dialect for Ascend NPU kernels. */
+  AscendC = 'ascend-c',
 }
